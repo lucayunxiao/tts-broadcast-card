@@ -88,6 +88,10 @@ Installing the [hass-edge-tts](https://github.com/hasscc/hass-edge-tts) integrat
 
 ### Graphical User Interface (UI Editor)
 
+<p align="center">
+  <img src="assets/configuration_preview.png" alt="Graphical Card Editor" width="75%"/>
+</p>
+
 Add a new card to your dashboard and select **TTS Broadcast Card**. The visual editor is organized into 4 collapsible sections:
 
 1. **Core Settings**:
