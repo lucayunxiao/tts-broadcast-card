@@ -88,6 +88,10 @@
 
 ### 图形化配置面板 (Visual Editor)
 
+<p align="center">
+  <img src="assets/configuration_preview.png" alt="图形化卡片编辑器" width="75%"/>
+</p>
+
 在仪表盘点击“添加卡片”，搜索并选择 **TTS Broadcast Card**，面板分为四个折叠层级：
 
 1. **基础配置 (Core Settings)**：
@@ -105,6 +109,28 @@
 4. **高级设置 (Advanced Settings)**：
    - `script`：自定义后台广播脚本实体（覆盖原生流程）。
    - `input_text`：用于同步播报文本状态的文本实体。
+
+---
+
+### YAML 配置示例
+
+```yaml
+type: custom:tts-broadcast-card
+media_player: media_player.living_room_speaker
+tts_entity: tts.edge_tts
+placeholder: "请输入广播内容..."
+chime_enabled: true
+chime_url: media-source://media_source/local/notification.mp3
+chime_delay: 3.5
+title: "广播"
+subtitle: "客厅音箱"
+ready_color: "#2196f3"
+active_color: "#ff5722"
+input_icon: mdi:comment-text-outline
+button_icon: mdi:bullhorn
+badge_icon: mdi:send
+active_icon: mdi:volume-high
+```
 
 ---
 
