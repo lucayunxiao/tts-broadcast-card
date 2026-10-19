@@ -70,14 +70,22 @@ Installing the [hass-edge-tts](https://github.com/hasscc/hass-edge-tts) integrat
 ### Method 1: Via HACS (Recommended)
 
 1. Open **HACS** in your Home Assistant dashboard.
-2. Click the top-right three dots menu `⋮` and select **Custom repositories**.
-3. In the dialog, enter:
-   - **Repository**: `https://github.com/lucayunxiao/tts-broadcast-card`
-   - **Type**: `Dashboard` (or `Plugin`)
-4. Click **Add**.
-5. Search for `TTS Broadcast Card` in HACS, click **Download**, and reload your browser.
+2. Search for `TTS Broadcast Card` in the search bar.
+3. Click on the card and select **Download**.
+4. Refresh your browser window.
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=lucayunxiao&repository=tts-broadcast-card&category=plugin)
+
+> [!TIP]
+> **For Lovelace YAML Mode (`mode: yaml`) Users**:  
+> If your Home Assistant dashboard is configured in pure YAML mode, add the following resource definition to your `ui-lovelace.yaml` or `configuration.yaml` after downloading via HACS, then restart Home Assistant:
+> ```yaml
+> lovelace:
+>   mode: yaml
+>   resources:
+>     - url: /hacsfiles/tts-broadcast-card/tts-broadcast-card.js
+>       type: module
+> ```
 
 ### Method 2: Manual Installation
 

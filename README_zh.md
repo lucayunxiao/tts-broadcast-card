@@ -67,17 +67,25 @@
 
 ## 🚀 安装指南 (Installation)
 
-### 方式一：通过 HACS 自定义仓库添加 (推荐)
+### 方式一：通过 HACS 商店安装 (推荐)
 
 1. 打开 Home Assistant 左侧栏的 **HACS**。
-2. 点击右上角的三点菜单 `⋮`，选择 **自定义存储库 (Custom repositories)**。
-3. 在弹出的窗口中填入：
-   - **存储库地址**：`https://github.com/lucayunxiao/tts-broadcast-card`
-   - **类别**：`Lovelace` (或 `Dashboard` / `Plugin`)
-4. 点击 **添加 (Add)**。
-5. 在 HACS 卡片列表中搜索 `TTS Broadcast Card`，点击 **下载 (Download)** 并刷新浏览器。
+2. 在搜索栏中直接搜索 `TTS Broadcast Card`。
+3. 点击卡片并选择 **下载 (Download)**。
+4. 刷新浏览器即可在仪表盘中添加并使用！
 
 [![在 Home Assistant 中打开 HACS 仓库](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=lucayunxiao&repository=tts-broadcast-card&category=plugin)
+
+> [!TIP]
+> **针对 Lovelace YAML 模式 (`mode: yaml`) 用户**：  
+> 若您的 Home Assistant 仪表盘配置为纯 YAML 代码模式，通过 HACS 下载后，请在 `ui-lovelace.yaml` 或 `configuration.yaml` 中添加以下资源引用，并重启 Home Assistant：
+> ```yaml
+> lovelace:
+>   mode: yaml
+>   resources:
+>     - url: /hacsfiles/tts-broadcast-card/tts-broadcast-card.js
+>       type: module
+> ```
 
 ### 方式二：手动安装
 
