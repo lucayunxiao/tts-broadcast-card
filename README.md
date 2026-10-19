@@ -213,6 +213,11 @@ Upload an mp3 file to your Home Assistant media directory (<b>Media > Local Medi
 Yes! Pressing the <kbd>Enter</kbd> key on desktop or the <kbd>Send</kbd> action key on mobile virtual keyboards will automatically dispatch the announcement and clear the input field.
 </details>
 
+<details>
+<summary><b>6. Why does my Google Cast / smart speaker wake up (play connection chime) but produce no speech?</b></summary>
+If you keep your smart speakers or IoT devices on an isolated IoT VLAN/subnet, or if your Wi-Fi has Client Device Isolation enabled, the speaker may receive the control signal (TCP 8009) to wake up, but fail to connect back to Home Assistant to fetch the audio stream. Ensure your router/firewall allows traffic from the speaker to Home Assistant on <b>TCP port 80 / 443 / 8123</b>.
+</details>
+
 ---
 
 ## 📄 License

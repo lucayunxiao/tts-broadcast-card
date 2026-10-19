@@ -213,6 +213,11 @@ DLNA、AirPlay 或 Chromecast 音箱从空闲启动到音频会话激活存在�
 支持！在电脑端输入文本后按下 <kbd>Enter</kbd> 键，或在手机虚拟键盘上按下 <kbd>发送</kbd> 按钮，均会自动触发广播并清空输入框。
 </details>
 
+<details>
+<summary><b>6. 为什么 Google Cast / 智能音箱被成功唤醒（听到了连接拉起声），但随后没有发出任何语音？</b></summary>
+如果您将智能音箱或 IoT 设备划分在独立的 IoT VLAN（或子网）中，或者 Wi-Fi 开启了客户端设备隔离（Client Isolation），音箱虽然能够接收控制信令（TCP 8009）被正常唤醒拉起，但却会被防火墙拦截而无法向 Home Assistant 发起 HTTP/HTTPS 请求下载音频流。请确保您的路由器/防火墙放行了音箱访问 Home Assistant 的 <b>TCP 80 / 443 / 8123</b> 端口。
+</details>
+
 ---
 
 ## 📄 开源许可证 (License)
