@@ -976,7 +976,7 @@ class TtsBroadcastCard extends HTMLElement {
       mainIcon.setAttribute("icon", this._config.active_icon || "mdi:volume-high");
       badgeIcon.setAttribute("icon", "mdi:waveform");
       primaryText.textContent = "Broadcasting...";
-      secondaryText.textContent = "Active 🔊";
+      secondaryText.textContent = "Active \u{1F50A}";
     } else {
       card.className = "card";
       if (iconCircle) iconCircle.classList.remove("pulse-anim");
