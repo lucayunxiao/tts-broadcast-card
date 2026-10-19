@@ -9,7 +9,7 @@
 
 <p align="center">
   <b>A modern, zero-configuration reactive TTS broadcast card for Home Assistant Lovelace</b><br/>
-  Featuring native chime playback, Microsoft Edge TTS neural multi-language auto-detection, visual GUI form editor, and real-time state feedback.
+  Featuring native chime playback, interactive volume control, hardware volume delegation, auto-unmute, UPnP session release, Microsoft Edge TTS neural multi-language auto-detection, visual GUI form editor, and real-time state feedback.
 </p>
 
 <p align="center">
@@ -30,15 +30,20 @@
 
 ## ✨ Features
 
-- ⚡ **Zero-Script Out-of-the-Box**: Orchestrates the entire broadcast pipeline directly from frontend Web Components. No complex backend YAML scripts or automations required!
+- ⚡ **Zero-Script Out-of-the-Box**: Orchestrates the entire broadcast pipeline directly from frontend Web Components. No complex backend YAML scripts, automations, or template helpers required!
+- 🔊 **Interactive In-Card Volume Control**: Adjust broadcast volume directly from the card via an interactive volume pill and mini slider. Click the pill to toggle mute/restore with persistent memory. Chosen volume is automatically remembered per speaker in browser local storage.
+- 🎛️ **Hardware Volume Delegation (`volume_entity`)**: Seamlessly decouple UPnP/DLNA media streaming from native hardware amplifier volume controls (ideal for Devialet Phantom, KEF, Sonos, or custom AV receivers with separate controller and player entities).
+- 🔈 **Smart Auto-Unmute Before Broadcast (`auto_unmute`)**: Automatically sends an un-mute command to the hardware volume entity before speech starts, ensuring critical announcements and security alerts are never missed.
+- 🛑 **Intelligent Auto-Stop & Session Release (`auto_stop`)**: Releases UPnP/DLNA session locks after speech playback finishes so smart speakers (e.g. Devialet Phantom, Sonos) automatically switch back to TV Optical (TOSLink) or HDMI eARC inputs. Includes automatic `supported_features` bitmask detection (STOP vs PAUSE) to ensure zero 400 Bad Request errors.
 - 🔔 **Pre-Broadcast Notification Chime**: Plays a chime/bell sound before speaking, with a configurable speaker transition buffer (`chime_delay`) to prevent audio cut-offs on DLNA, Google Cast, Sonos, or AirPlay speakers.
 - 🌐 **Microsoft Edge TTS Neural Voice Auto-Detection**: Automatically detects input language and routes to native neural voices:
   - 🇨🇳 Chinese $\to$ `zh-CN-XiaoxiaoNeural` (晓晓)
   - 🇺🇸 English $\to$ `en-US-JennyNeural` (Jenny)
   - 🇯🇵 Japanese $\to$ `ja-JP-NanamiNeural` (Nanami / 七海)
   - 🇰🇷 Korean $\to$ `ko-KR-SunHiNeural` (SunHi / 善喜)
-- 🎛️ **Full Graphical Visual Configurator**: Clean 4-tier expandable `<ha-form>` editor (Core Settings, Notification Chime, Appearance & Icons, Advanced Settings).
-- 🛡️ **Debounced State & 16s Watchdog**: Dynamic pulse animation during playback, real-time media player state tracking, and a failsafe safety reset watchdog.
+- 📱 **Mobile Screen Optimization**: Responsive layout adjustments for mobile screens (`<= 480px`), providing a compact volume pill and slider.
+- 🎛️ **Full Graphical Visual Configurator**: Clean 5-tier expandable `<ha-form>` editor (Core Settings, Volume & Sound Control, Notification Chime, Appearance & Icons, Advanced Settings).
+- 🛡️ **Debounced State & 18s Safety Watchdog**: Dynamic pulse animation during playback, real-time media player state tracking, and an 18-second failsafe safety reset watchdog.
 - 🔄 **Backward Compatible**: Supports optional custom script delegation and `input_text` state synchronization for power users.
 
 ---
@@ -79,7 +84,7 @@ Installing the [hass-edge-tts](https://github.com/hasscc/hass-edge-tts) integrat
 1. Download [`dist/tts-broadcast-card.js`](https://raw.githubusercontent.com/lucayunxiao/tts-broadcast-card/main/dist/tts-broadcast-card.js).
 2. Copy `tts-broadcast-card.js` into your Home Assistant `<config>/www/` directory.
 3. In Home Assistant, navigate to **Settings > Dashboards > Three dots (top-right) > Resources**.
-4. Click **Add Resource**, set URL to `/local/tts-broadcast-card.js?v=1.0.0` and Resource type to `JavaScript Module`.
+4. Click **Add Resource**, set URL to `/local/tts-broadcast-card.js?v=1.1.0` and Resource type to `JavaScript Module`.
 5. Refresh your browser cache.
 
 ---
@@ -92,21 +97,27 @@ Installing the [hass-edge-tts](https://github.com/hasscc/hass-edge-tts) integrat
   <img src="assets/configuration_preview.png" alt="Graphical Card Editor" width="75%"/>
 </p>
 
-Add a new card to your dashboard and select **TTS Broadcast Card**. The visual editor is organized into 4 collapsible sections:
+Add a new card to your dashboard and select **TTS Broadcast Card**. The visual editor is organized into 5 collapsible sections:
 
 1. **Core Settings**:
-   - `media_player` (*Required*): Target speaker entity.
+   - `media_player` (*Required*): Target speaker entity for broadcast playback.
    - `tts_entity` (*Optional*): TTS engine entity (defaults to `tts.edge_tts`).
    - `placeholder` (*Optional*): Input placeholder text (default: `Message...`).
-2. **Notification Chime**:
+2. **Volume & Sound Control**:
+   - `volume_level`: Default broadcast volume slider (0% ~ 100%, step 5, default 40%).
+   - `show_volume_control`: Toggle in-card interactive volume pill and slider.
+   - `volume_entity` (*Optional*): Hardware volume entity override (e.g. amplifier or Devialet controller).
+   - `auto_unmute`: Automatically un-mute speaker before broadcast.
+   - `auto_stop`: Release UPnP/DLNA session after speech so TV Optical / HDMI eARC restores automatically.
+3. **Notification Chime**:
    - `chime_enabled`: Toggle pre-broadcast chime audio on/off.
    - `chime_url`: URL or media path (`media-source://...`, `/local/...`, or HTTP URL).
    - `chime_delay`: Slider (0.5s ~ 10.0s) to allow hardware audio buffer to flush before TTS speaks.
-3. **Appearance & Icons**:
+4. **Appearance & Icons**:
    - `title` & `subtitle`: Button header text.
    - `ready_color` & `active_color`: Hex or CSS colors for idle and broadcasting states.
    - `input_icon`, `button_icon`, `badge_icon`, `active_icon`: Custom MDI icons.
-4. **Advanced Settings**:
+5. **Advanced Settings**:
    - `script`: Optional custom backend script override.
    - `input_text`: Optional text helper entity to sync message contents.
 
@@ -116,7 +127,12 @@ Add a new card to your dashboard and select **TTS Broadcast Card**. The visual e
 
 ```yaml
 type: custom:tts-broadcast-card
-media_player: media_player.living_room_speaker
+media_player: media_player.living_room_player
+volume_entity: media_player.living_room_controller # Optional: separate amplifier / controller entity
+volume_level: 45
+show_volume_control: true
+auto_unmute: true
+auto_stop: true
 tts_entity: tts.edge_tts
 placeholder: "Type a message to broadcast..."
 chime_enabled: true
@@ -141,6 +157,11 @@ active_icon: mdi:volume-high
 | `media_player` | string | **Required** | Entity ID of target speaker (`media_player.xxx`). |
 | `tts_entity` | string | `tts.edge_tts` | Entity ID of TTS engine. |
 | `placeholder` | string | `Message...` | Text box placeholder text. |
+| `volume_level` | number | `40` | Default broadcast volume percentage (0 - 100%). |
+| `show_volume_control` | boolean | `true` | Show interactive volume pill and slider directly on the card. |
+| `volume_entity` | string | *None* | Optional hardware volume entity ID for dual-entity speaker setups. |
+| `auto_unmute` | boolean | `true` | Automatically un-mute speaker before broadcasting. |
+| `auto_stop` | boolean | `true` | Automatically release UPnP session after playback to restore TV optical sound. |
 | `chime_enabled` | boolean | `true` | Whether to play a pre-broadcast notification sound. |
 | `chime_url` | string | `media-source://media_source/local/notification.mp3` | Audio URL or path for notification chime. |
 | `chime_delay` | number | `3.5` | Transition delay (in seconds) between chime and speech. |
@@ -165,12 +186,22 @@ Network and wireless speakers (Chromecast, DLNA, AirPlay) often need a short war
 </details>
 
 <details>
-<summary><b>2. How can I prepare a local chime file?</b></summary>
+<summary><b>2. Why doesn't my Devialet / Sonos speaker switch back to TV Optical sound after TTS?</b></summary>
+When streaming TTS or chime via UPnP/DLNA, the player remains in an active session lock state even after the audio track ends. This prevents smart speakers from detecting the end of the streaming session and switching back to TV Optical (TOSLink) or HDMI eARC automatically. Enabling <code>auto_stop: true</code> (enabled by default) calculates the announcement duration and automatically stops/pauses the UPnP session, freeing the speaker to immediately restore TV sound.
+</details>
+
+<details>
+<summary><b>3. How do I configure dual-entity media players (e.g. Devialet Phantom controller vs UPnP player)?</b></summary>
+Many high-end audio setups split duties across two entities: a UPnP/DLNA streaming player (e.g. <code>media_player.devialet_player</code>) and a hardware master controller (e.g. <code>media_player.devialet_controller</code>). In the card configuration, assign <code>media_player</code> to your streaming player and <code>volume_entity</code> to your controller. The card will seamlessly route media playback to the player while directing volume adjustments and auto-unmute commands to the hardware controller.
+</details>
+
+<details>
+<summary><b>4. How can I prepare a local chime file?</b></summary>
 Upload an mp3 file to your Home Assistant media directory (<b>Media > Local Media</b>) or <code>/config/www/notification.mp3</code>, and specify <code>media-source://media_source/local/notification.mp3</code> or <code>/local/notification.mp3</code> as <code>chime_url</code>.
 </details>
 
 <details>
-<summary><b>3. Does it support Enter key to send?</b></summary>
+<summary><b>5. Does it support Enter key to send?</b></summary>
 Yes! Pressing the <kbd>Enter</kbd> key on desktop or the <kbd>Send</kbd> action key on mobile virtual keyboards will automatically dispatch the announcement and clear the input field.
 </details>
 

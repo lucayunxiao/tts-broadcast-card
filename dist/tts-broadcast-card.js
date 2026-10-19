@@ -1,12 +1,14 @@
 /**
  * TTS Broadcast Card
  * Repository: https://github.com/lucayunxiao/tts-broadcast-card
- * Version: 1.0.0
+ * Version: 1.1.0
  * License: MIT
  *
  * A sleek, reactive text-to-speech broadcast card for Home Assistant Lovelace
- * featuring native zero-script orchestration, chime playback, Microsoft Edge TTS
- * multi-language voice detection, graphical configuration, and live state feedback.
+ * featuring native zero-script orchestration, interactive volume controls,
+ * hardware volume delegation, auto-unmute, UPnP auto-stop session release,
+ * chime playback, Microsoft Edge TTS neural multi-language voice detection,
+ * graphical configuration, and live state feedback.
  */
 
 const SCHEMA = [
@@ -27,6 +29,50 @@ const SCHEMA = [
     label: "Input Placeholder",
     required: false,
     selector: { text: {} }
+  },
+  {
+    type: "expandable",
+    name: "volume_section",
+    title: "Volume & Sound Control",
+    label: "Volume & Sound Control",
+    icon: "mdi:volume-high",
+    flatten: true,
+    schema: [
+      {
+        name: "volume_level",
+        label: "Default Broadcast Volume (%)",
+        selector: {
+          number: {
+            min: 0,
+            max: 100,
+            step: 5,
+            mode: "slider",
+            unit_of_measurement: "%"
+          }
+        }
+      },
+      {
+        name: "show_volume_control",
+        label: "Show Interactive Volume Control on Card",
+        selector: { boolean: {} }
+      },
+      {
+        name: "volume_entity",
+        label: "Volume Target Entity (Optional override, e.g. native media_player)",
+        required: false,
+        selector: { entity: { domain: "media_player" } }
+      },
+      {
+        name: "auto_unmute",
+        label: "Auto-Unmute Before Broadcast",
+        selector: { boolean: {} }
+      },
+      {
+        name: "auto_stop",
+        label: "Auto-Stop (Release UPnP / Restore TV) After Broadcast",
+        selector: { boolean: {} }
+      }
+    ]
   },
   {
     type: "expandable",
@@ -174,7 +220,7 @@ class TtsBroadcastCardEditor extends HTMLElement {
           display: block;
         }
       </style>
-      <ha-form id="form"></ha-form>
+      <ha-form id=\"form\"></ha-form>
     `;
 
     this._form = this.shadowRoot.getElementById("form");
@@ -208,6 +254,8 @@ class TtsBroadcastCard extends HTMLElement {
     this._sessionStartTime = 0;
     this._resetTimer = null;
     this._ticker = null;
+    this._currentVolume = undefined;
+    this._lastNonZeroVolume = 40;
   }
 
   static getConfigElement() {
@@ -228,6 +276,10 @@ class TtsBroadcastCard extends HTMLElement {
       media_player: defaultPlayer,
       tts_entity: defaultTts,
       placeholder: "Message...",
+      volume_level: 40,
+      show_volume_control: true,
+      auto_unmute: true,
+      auto_stop: true,
       chime_enabled: true,
       chime_url: "media-source://media_source/local/notification.mp3",
       chime_delay: 3.5,
@@ -264,11 +316,32 @@ class TtsBroadcastCard extends HTMLElement {
       chime_enabled: true,
       chime_url: "media-source://media_source/local/notification.mp3",
       chime_delay: 3.5,
+      volume_level: 40,
+      show_volume_control: true,
+      auto_unmute: true,
+      auto_stop: true,
       ...config
     };
 
+    if (this._currentVolume === undefined) {
+      try {
+        const saved = localStorage.getItem("tts_broadcast_card_vol_" + (this._config.media_player || "default"));
+        if (saved !== null && !isNaN(Number(saved))) {
+          this._currentVolume = Number(saved);
+        } else {
+          this._currentVolume = Number(this._config.volume_level ?? 40);
+        }
+      } catch (e) {
+        this._currentVolume = Number(this._config.volume_level ?? 40);
+      }
+      if (this._currentVolume > 0) {
+        this._lastNonZeroVolume = this._currentVolume;
+      }
+    }
+
     if (this._rendered) {
       this._updateStyles();
+      this._updateVolumeUI();
       this._updateState();
     }
   }
@@ -298,7 +371,7 @@ class TtsBroadcastCard extends HTMLElement {
     this._rendered = true;
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
-      <style id="custom-styles"></style>
+      <style id=\"custom-styles\"></style>
       <style>
         :host {
           display: block;
@@ -323,7 +396,7 @@ class TtsBroadcastCard extends HTMLElement {
           flex: 1;
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 8px;
           min-width: 0;
         }
         .input-icon {
@@ -331,8 +404,9 @@ class TtsBroadcastCard extends HTMLElement {
           --mdc-icon-size: 20px;
           display: flex;
           align-items: center;
+          flex-shrink: 0;
         }
-        input {
+        input#msgInput {
           flex: 1;
           min-width: 0;
           border: none;
@@ -343,10 +417,96 @@ class TtsBroadcastCard extends HTMLElement {
           font-family: inherit;
           padding: 8px 0;
         }
-        input::placeholder {
+        input#msgInput::placeholder {
           color: var(--secondary-text-color, #888);
           opacity: 0.7;
         }
+
+        /* Volume Control Box */
+        .volume-container {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-shrink: 0;
+          padding: 2px 6px;
+          border-radius: 8px;
+          background: rgba(var(--rgb-primary-text, 255, 255, 255), 0.04);
+          transition: background 0.2s ease, border-color 0.2s ease;
+          border: 1px solid transparent;
+        }
+        .volume-container:hover {
+          background: rgba(var(--rgb-primary-text, 255, 255, 255), 0.08);
+          border-color: rgba(var(--rgb-primary-text, 255, 255, 255), 0.08);
+        }
+        .volume-pill {
+          display: flex;
+          align-items: center;
+          gap: 3px;
+          background: transparent;
+          border: none;
+          padding: 2px 2px;
+          color: var(--primary-text-color, #fff);
+          cursor: pointer;
+          font-family: inherit;
+          font-size: 11px;
+          font-weight: 600;
+          border-radius: 6px;
+          user-select: none;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .volume-pill ha-icon {
+          --mdc-icon-size: 18px;
+          color: var(--ready-color, #2196f3);
+          transition: color 0.3s ease;
+        }
+        .volume-pill span {
+          min-width: 28px;
+          text-align: right;
+          font-variant-numeric: tabular-nums;
+          color: var(--secondary-text-color, #888);
+          font-size: 11px;
+        }
+        .volume-slider-box {
+          display: flex;
+          align-items: center;
+          width: 68px;
+          transition: width 0.2s ease;
+        }
+        .volume-slider {
+          width: 100%;
+          height: 4px;
+          -webkit-appearance: none;
+          appearance: none;
+          border-radius: 2px;
+          background: var(--divider-color, rgba(255, 255, 255, 0.2));
+          outline: none;
+          cursor: pointer;
+          accent-color: var(--ready-color, #2196f3);
+          transition: accent-color 0.3s ease;
+        }
+        .volume-slider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          background: var(--ready-color, #2196f3);
+          cursor: pointer;
+          transition: transform 0.1s ease;
+        }
+        .volume-slider::-webkit-slider-thumb:hover {
+          transform: scale(1.2);
+        }
+        .card.broadcasting .volume-pill ha-icon {
+          color: var(--active-color, #ff5722);
+        }
+        .card.broadcasting .volume-slider {
+          accent-color: var(--active-color, #ff5722);
+        }
+        .card.broadcasting .volume-slider::-webkit-slider-thumb {
+          background: var(--active-color, #ff5722);
+        }
+
         .divider {
           width: 1px;
           height: 32px;
@@ -443,23 +603,46 @@ class TtsBroadcastCard extends HTMLElement {
           color: var(--secondary-text-color, #888);
           line-height: 1.2;
         }
+
+        @media (max-width: 480px) {
+          .volume-slider-box {
+            width: 48px;
+          }
+          .volume-container {
+            gap: 2px;
+            padding: 2px 4px;
+          }
+          .volume-pill span {
+            font-size: 10px;
+            min-width: 24px;
+          }
+        }
       </style>
-      <div class="card" id="card">
-        <div class="input-box">
-          <ha-icon class="input-icon" id="inputIconEl" icon="mdi:comment-text-outline"></ha-icon>
-          <input type="text" id="msgInput" placeholder="Message..." enterkeyhint="send" autocomplete="off" />
+      <div class=\"card\" id=\"card\">
+        <div class=\"input-box\">
+          <ha-icon class=\"input-icon\" id=\"inputIconEl\" icon=\"mdi:comment-text-outline\"></ha-icon>
+          <input type=\"text\" id=\"msgInput\" placeholder=\"Message...\" enterkeyhint=\"send\" autocomplete=\"off\" />
         </div>
-        <div class="divider"></div>
-        <button class="btn" id="sendBtn" type="button">
-          <div class="icon-circle" id="iconCircle">
-            <ha-icon id="mainIcon" icon="mdi:bullhorn"></ha-icon>
-            <div class="badge" id="badgeEl">
-              <ha-icon id="badgeIcon" icon="mdi:send"></ha-icon>
+        <div class=\"volume-container\" id=\"volumeContainer\">
+          <button class=\"volume-pill\" id=\"volumePill\" type=\"button\" title=\"Volume (Click to toggle mute)\">
+            <ha-icon id=\"volumeIcon\" icon=\"mdi:volume-high\"></ha-icon>
+            <span id=\"volumeValue\">40%</span>
+          </button>
+          <div class=\"volume-slider-box\" id=\"volumeSliderBox\">
+            <input type=\"range\" class=\"volume-slider\" id=\"volumeSlider\" min=\"0\" max=\"100\" step=\"5\" value=\"40\" title=\"Broadcast Volume\" />
+          </div>
+        </div>
+        <div class=\"divider\"></div>
+        <button class=\"btn\" id=\"sendBtn\" type=\"button\">
+          <div class=\"icon-circle\" id=\"iconCircle\">
+            <ha-icon id=\"mainIcon\" icon=\"mdi:bullhorn\"></ha-icon>
+            <div class=\"badge\" id=\"badgeEl\">
+              <ha-icon id=\"badgeIcon\" icon=\"mdi:send\"></ha-icon>
             </div>
           </div>
-          <div class="text-group">
-            <span class="primary-text" id="primaryText">Broadcast</span>
-            <span class="secondary-text" id="secondaryText">Media Player</span>
+          <div class=\"text-group\">
+            <span class=\"primary-text\" id=\"primaryText\">Broadcast</span>
+            <span class=\"secondary-text\" id=\"secondaryText\">Media Player</span>
           </div>
         </button>
       </div>
@@ -467,6 +650,8 @@ class TtsBroadcastCard extends HTMLElement {
 
     const input = this.shadowRoot.getElementById("msgInput");
     const btn = this.shadowRoot.getElementById("sendBtn");
+    const volumeSlider = this.shadowRoot.getElementById("volumeSlider");
+    const volumePill = this.shadowRoot.getElementById("volumePill");
 
     btn.addEventListener("click", (e) => {
       e.preventDefault();
@@ -482,8 +667,66 @@ class TtsBroadcastCard extends HTMLElement {
       }
     });
 
+    if (volumeSlider) {
+      volumeSlider.addEventListener("input", (e) => {
+        this._updateVolumeValue(e.target.value);
+      });
+    }
+
+    if (volumePill) {
+      volumePill.addEventListener("click", (e) => {
+        e.preventDefault();
+        // Toggle mute / restore
+        if (this._currentVolume > 0) {
+          this._lastNonZeroVolume = this._currentVolume;
+          this._updateVolumeValue(0);
+        } else {
+          this._updateVolumeValue(this._lastNonZeroVolume || 40);
+        }
+      });
+    }
+
     this._updateStyles();
+    this._updateVolumeUI();
     this._updateState();
+  }
+
+  _updateVolumeValue(val) {
+    this._currentVolume = Math.max(0, Math.min(100, Math.round(Number(val))));
+    if (this._currentVolume > 0) {
+      this._lastNonZeroVolume = this._currentVolume;
+    }
+    this._updateVolumeUI();
+    try {
+      localStorage.setItem("tts_broadcast_card_vol_" + (this._config.media_player || "default"), String(this._currentVolume));
+    } catch (e) {}
+  }
+
+  _updateVolumeUI() {
+    if (!this.shadowRoot) return;
+    const container = this.shadowRoot.getElementById("volumeContainer");
+    const slider = this.shadowRoot.getElementById("volumeSlider");
+    const valueEl = this.shadowRoot.getElementById("volumeValue");
+    const iconEl = this.shadowRoot.getElementById("volumeIcon");
+
+    if (container) {
+      container.style.display = (this._config.show_volume_control === false) ? "none" : "flex";
+    }
+
+    const vol = this._currentVolume !== undefined ? this._currentVolume : Number(this._config.volume_level ?? 40);
+    if (slider) slider.value = String(vol);
+    if (valueEl) valueEl.textContent = `${vol}%`;
+    if (iconEl) {
+      if (vol === 0) {
+        iconEl.setAttribute("icon", "mdi:volume-off");
+      } else if (vol < 30) {
+        iconEl.setAttribute("icon", "mdi:volume-low");
+      } else if (vol < 70) {
+        iconEl.setAttribute("icon", "mdi:volume-medium");
+      } else {
+        iconEl.setAttribute("icon", "mdi:volume-high");
+      }
+    }
   }
 
   _updateStyles() {
@@ -519,6 +762,10 @@ class TtsBroadcastCard extends HTMLElement {
     this._startSession();
 
     try {
+      const targetVol = this._currentVolume !== undefined ? this._currentVolume : Number(this._config.volume_level ?? 40);
+      const volDecimal = Math.max(0, Math.min(1, targetVol / 100));
+      const volumeEntity = this._config.volume_entity || this._config.media_player;
+
       // Optional input_text synchronization if configured
       if (this._config.input_text) {
         this._hass.callService("input_text", "set_value", {
@@ -532,7 +779,10 @@ class TtsBroadcastCard extends HTMLElement {
         await this._hass.callService(
           "script",
           this._config.script.replace(/^script\./, ""),
-          { message: text }
+          {
+            message: text,
+            volume: volDecimal
+          }
         );
       } else {
         // Native Zero-Script Broadcast Pipeline
@@ -541,6 +791,31 @@ class TtsBroadcastCard extends HTMLElement {
         const chimeEnabled = this._config.chime_enabled !== false;
         const chimeUrl = this._config.chime_url || "media-source://media_source/local/notification.mp3";
         const chimeDelay = Number(this._config.chime_delay ?? 3.5);
+
+        // Stage 0: Hardware un-mute and set volume on the target volume entity
+        if (this._config.auto_unmute !== false) {
+          try {
+            await this._hass.callService(
+              "media_player",
+              "volume_mute",
+              { is_volume_muted: false },
+              { entity_id: volumeEntity }
+            );
+          } catch (mErr) {
+            console.warn("Auto-unmute failed:", mErr);
+          }
+        }
+
+        try {
+          await this._hass.callService(
+            "media_player",
+            "volume_set",
+            { volume_level: volDecimal },
+            { entity_id: volumeEntity }
+          );
+        } catch (vErr) {
+          console.warn("Volume set failed:", vErr);
+        }
 
         // Stage 1: Pre-broadcast chime (if enabled)
         if (chimeEnabled && chimeUrl) {
@@ -585,6 +860,39 @@ class TtsBroadcastCard extends HTMLElement {
           speakData,
           { entity_id: ttsEntity }
         );
+
+        // Stage 5: Release UPnP / DLNA session lock after broadcast so TV optical recovers
+        if (this._config.auto_stop !== false) {
+          const estDurationMs = Math.max(5000, text.length * 280) + 2000;
+          setTimeout(async () => {
+            const stopEntity = this._config.stop_entity || this._config.volume_entity || mediaPlayer;
+            const entityObj = this._hass && this._hass.states && this._hass.states[stopEntity];
+            const features = (entityObj && entityObj.attributes && entityObj.attributes.supported_features) || 0;
+            // MediaPlayerEntityFeature: STOP = 4096 (or 2048 in older HA), PAUSE = 1
+            const supportsStop = (features & 4096) !== 0 || (features & 2048) !== 0;
+            const supportsPause = (features & 1) !== 0;
+
+            try {
+              if (supportsStop) {
+                await this._hass.callService(
+                  "media_player",
+                  "media_stop",
+                  {},
+                  { entity_id: stopEntity }
+                );
+              } else if (supportsPause) {
+                await this._hass.callService(
+                  "media_player",
+                  "media_pause",
+                  {},
+                  { entity_id: stopEntity }
+                );
+              }
+            } catch (stopErr) {
+              console.warn("Auto-stop safe notice:", stopErr);
+            }
+          }, estDurationMs);
+        }
       }
     } catch (err) {
       console.error("TTS Broadcast error:", err);
@@ -638,8 +946,8 @@ class TtsBroadcastCard extends HTMLElement {
     if (this._sessionActive) {
       const elapsed = Date.now() - this._sessionStartTime;
 
-      // Hard timeout guard (16 seconds maximum failsafe)
-      if (elapsed > 16000) {
+      // Hard timeout guard (18 seconds maximum failsafe)
+      if (elapsed > 18000) {
         this._endSession();
         return;
       }
@@ -689,7 +997,8 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "tts-broadcast-card",
   name: "TTS Broadcast Card",
-  description: "A reactive text-to-speech broadcast card with customizable chime, player, colors, and live state feedback.",
+  description: "A reactive text-to-speech broadcast card with customizable volume, chime, player, colors, and live state feedback.",
   preview: true,
   documentationURL: "https://github.com/lucayunxiao/tts-broadcast-card"
 });
+

@@ -9,7 +9,7 @@
 
 <p align="center">
   <b>Home Assistant Lovelace 现代极简、开箱即用的前端原生 TTS 广播卡片</b><br/>
-  集成前置提示音过渡、微软 Edge TTS 多语种神经网络声线自适应、图形化 UI 表单配置与实时动态状态反馈。
+  集成前置提示音过渡、交互式音量控制、硬件音量委托、智能释放 UPnP 会话切回电视光纤、微软 Edge TTS 多语种神经网络声线自适应、图形化 UI 表单配置与实时动态状态反馈。
 </p>
 
 <p align="center">
@@ -31,14 +31,19 @@
 ## ✨ 核心特性 (Features)
 
 - ⚡ **零脚本即插即用（Zero-Script）**：100% 由卡片前端组件直接驱动 Home Assistant 核心服务，告别编写后台 YAML Script、自动化与复杂 Jinja 模板！
+- 🔊 **卡片内置交互式音量控制（In-Card Volume Control）**：卡片表面直接集成音量胶囊按钮与平滑调节滑块，支持点击胶囊一键静音/还原，并按音箱实体在本地浏览器（`localStorage`）持久化记忆用户音量偏好。
+- 🎛️ **硬件音量控制分离委托 (`volume_entity`)**：支持将播报媒体流与实体音箱硬件音量解耦。专为帝瓦雷 Devialet Phantom（Controller 主控实体 + Player UPnP 播放流实体）、KEF、Sonos 或功放等双实体架构量身定制。
+- 🔈 **播报前智能自动解静音 (`auto_unmute`)**：在发送音量调节与播报指令前，主动向硬件实体发送 `media_player.volume_mute(is_volume_muted: false)`，确保重要提醒或安防告警绝不因昨夜静音而漏听。
+- 🛑 **智能释放音频通道与会话 (`auto_stop`)**：彻底解决 DLNA/UPnP 播报后音箱会话持续占线、导致电视光纤（Optical TOSLink）或 HDMI eARC 无法自动切回的痛点。内置 `supported_features` 二进制位掩码嗅探（位 4096/2048 判断 STOP，位 1 判断 PAUSE），在保障 0 报错（杜绝 400 Bad Request）的同时安全释放音频通道。
 - 🔔 **前置提示音（Notification Chime）**：支持在语音朗读前播放提示音或电台钟声，提供硬件缓冲延时滑动条（`chime_delay`），有效防止 DLNA、Chromecast、Sonos、HomePod 音箱在切换音频会话时吞字断音。
-- 🌐 **微软 Edge TTS 多语言智能声线嗅探**：根据输入文本自动匹配高拟真度神经网络声线，无须人工指定：
+- 🌐 **微软 Edge TTS 多语言智能声线嗅探**：根据输入文本自动匹配高拟真度神经网络声线，无须人工繁琐配置：
   - 🇨🇳 中文 $\to$ `zh-CN-XiaoxiaoNeural`（晓晓）
   - 🇺🇸 英文 $\to$ `en-US-JennyNeural`（Jenny）
   - 🇯🇵 日文 $\to$ `ja-JP-NanamiNeural`（七海）
   - 🇰🇷 韩文 $\to$ `ko-KR-SunHiNeural`（善喜）
-- 🎛️ **全图形化配置面板（GUI Visual Editor）**：利用原生 `<ha-form>` 构建折叠面板（基础配置、提示音配置、外观与图标、高级设置），无需手写 YAML。
-- 🛡️ **实时状态指示与 16 秒安全熔断**：播报期间呈现呼吸光晕与声波徽标动画，自动监听播放器状态；内置 16 秒超时看门狗，防止因外部音箱状态异常导致按钮死锁。
+- 📱 **移动端响应式布局优化**：针对宽小于等于 480px 的手机屏幕自动应用紧凑胶囊与滑块布局，多设备无缝适应。
+- 🎛️ **全图形化配置面板（GUI Visual Editor）**：利用原生 `<ha-form>` 构建 5 个折叠面板（基础配置、音量与声音控制、提示音配置、外观与图标、高级设置），无需手写 YAML。
+- 🛡️ **实时状态指示与 18 秒安全熔断**：播报期间呈现呼吸光晕与声波徽标动画，自动监听播放器状态；内置 18 秒超时看门狗，防止因外部音箱状态异常导致按钮死锁。
 - 🔄 **完备向下兼容**：保留对传统自定义脚本（Script Mode）与 `input_text` 文本同步接口的向下兼容支持。
 
 ---
@@ -79,7 +84,7 @@
 1. 下载仓库最新发布的 [`dist/tts-broadcast-card.js`](https://raw.githubusercontent.com/lucayunxiao/tts-broadcast-card/main/dist/tts-broadcast-card.js)。
 2. 将文件上传至 Home Assistant 的 `<config>/www/` 目录中。
 3. 进入 **设置 > 仪表盘 > 右上角三点 > 资源**。
-4. 点击 **添加资源**，URL 输入 `/local/tts-broadcast-card.js?v=1.0.0`，资源类型选择 `JavaScript 模块 (JavaScript Module)`。
+4. 点击 **添加资源**，URL 输入 `/local/tts-broadcast-card.js?v=1.1.0`，资源类型选择 `JavaScript 模块 (JavaScript Module)`。
 5. 保存并硬刷新浏览器缓存（Ctrl+F5 或 Shift+刷新）。
 
 ---
@@ -92,21 +97,27 @@
   <img src="assets/configuration_preview.png" alt="图形化卡片编辑器" width="75%"/>
 </p>
 
-在仪表盘点击“添加卡片”，搜索并选择 **TTS Broadcast Card**，面板分为四个折叠层级：
+在仪表盘点击“添加卡片”，搜索并选择 **TTS Broadcast Card**，面板分为五个折叠层级：
 
 1. **基础配置 (Core Settings)**：
-   - `media_player`（必填）：目标广播音箱播放器。
+   - `media_player`（必填）：目标广播音箱播放器实体。
    - `tts_entity`（可选）：TTS 引擎实体，默认自动推荐 `tts.edge_tts`。
    - `placeholder`（可选）：输入框提示文字（默认 `Message...`）。
-2. **提示音配置 (Notification Chime)**：
+2. **音量与声音控制 (Volume & Sound Control)**：
+   - `volume_level`：默认广播音量滑动条（0% ~ 100%，步长 5，默认 40%）。
+   - `show_volume_control`：卡片表面是否显示交互式音量胶囊与调节滑块开关。
+   - `volume_entity`（可选）：独立硬件音量实体（如外置功放或帝瓦雷主控实体）。
+   - `auto_unmute`：播报前是否自动解除静音。
+   - `auto_stop`：播报完成后是否自动停止/释放 UPnP 会话，以便恢复电视光纤音频。
+3. **提示音配置 (Notification Chime)**：
    - `chime_enabled`：提示音总开关（Toggle）。
    - `chime_url`：提示音音频链接（支持 `media-source://...`、`/local/...` 或外部 HTTP 音频）。
    - `chime_delay`：提示音与播报之间的缓冲时长（滑动条，0.5秒 ~ 10秒）。
-3. **外观与图标 (Appearance & Icons)**：
+4. **外观与图标 (Appearance & Icons)**：
    - `title` 与 `subtitle`：按钮主副标题。
    - `ready_color` 与 `active_color`：就绪态与播报态主题色（支持十六进制色号与 CSS 变量）。
    - `input_icon`、`button_icon`、`badge_icon`、`active_icon`：自定义 MDI 图标。
-4. **高级设置 (Advanced Settings)**：
+5. **高级设置 (Advanced Settings)**：
    - `script`：自定义后台广播脚本实体（覆盖原生流程）。
    - `input_text`：用于同步播报文本状态的文本实体。
 
@@ -116,7 +127,12 @@
 
 ```yaml
 type: custom:tts-broadcast-card
-media_player: media_player.living_room_speaker
+media_player: media_player.living_room_player
+volume_entity: media_player.living_room_controller # 可选：独立硬件主控/功放音量实体
+volume_level: 45
+show_volume_control: true
+auto_unmute: true
+auto_stop: true
 tts_entity: tts.edge_tts
 placeholder: "请输入广播内容..."
 chime_enabled: true
@@ -141,6 +157,11 @@ active_icon: mdi:volume-high
 | `media_player` | string | **必填** | 目标音箱播放器实体 ID (`media_player.xxx`)。 |
 | `tts_entity` | string | `tts.edge_tts` | TTS 引擎实体 ID。 |
 | `placeholder` | string | `Message...` | 输入框空值提示占位符。 |
+| `volume_level` | number | `40` | 默认广播音量百分比（0 - 100%）。 |
+| `show_volume_control` | boolean | `true` | 是否在卡片表面显示交互式音量胶囊按钮与滑块。 |
+| `volume_entity` | string | *无* | 可选独立硬件音量控制实体（用于与音频流实体解耦）。 |
+| `auto_unmute` | boolean | `true` | 播报前是否先向音箱发送解除静音指令。 |
+| `auto_stop` | boolean | `true` | 播报结束后是否自动停止会话，以便音箱自动切回电视光纤音频。 |
 | `chime_enabled` | boolean | `true` | 是否在播报前播放提示音。 |
 | `chime_url` | string | `media-source://...` | 提示声音频文件路径或网络直链。 |
 | `chime_delay` | number | `3.5` | 提示音播放完毕后等待音箱清空缓冲的时长（秒）。 |
@@ -165,12 +186,22 @@ DLNA、AirPlay 或 Chromecast 音箱从空闲启动到音频会话激活存在�
 </details>
 
 <details>
-<summary><b>2. 如何使用本地的提示音音频？</b></summary>
+<summary><b>2. 为什么帝瓦雷 (Devialet) / Sonos 等音箱播报完无法自动切回电视光纤音频？</b></summary>
+通过 UPnP/DLNA 播放 TTS 或提示音时，音箱在音频播放完后仍会保持流媒体会话连接状态，音箱的自动信源切换（Autoswitch）因此无法触发。开启 <code>auto_stop: true</code>（默认已开启）后，卡片会按文本字数智能估算时长，并在播报结束后自动发送停止/暂停指令释放 UPnP 会话，音箱即可瞬间无缝切回电视光纤（Optical）或 HDMI eARC 声音。
+</details>
+
+<details>
+<summary><b>3. 如何配置双实体音响系统（如 Devialet Controller 与 UPnP Player）？</b></summary>
+许多高端音箱或家庭影院在 Home Assistant 中包含两个实体：一个负责 UPnP 网络音频流播放（如 <code>media_player.devialet_player</code>），另一个负责硬件主机音量控制（如 <code>media_player.devialet_controller</code>）。在卡片配置中，将 <code>media_player</code> 设置为播放流实体，将 <code>volume_entity</code> 设置为主控实体。卡片即可智能将音频流发送到播放器，同时将音量设定与解静音指令发送给主控实体。
+</details>
+
+<details>
+<summary><b>4. 如何使用本地的提示音音频？</b></summary>
 将 mp3 音频上传至 Home Assistant 的 <b>媒体 > 本地媒体</b>，或放置在 <code>/config/www/notification.mp3</code>，在卡片配置的 <code>chime_url</code> 中填写 <code>media-source://media_source/local/notification.mp3</code> 或 <code>/local/notification.mp3</code> 即可。
 </details>
 
 <details>
-<summary><b>3. 支持回车快捷发送吗？</b></summary>
+<summary><b>5. 支持回车快捷发送吗？</b></summary>
 支持！在电脑端输入文本后按下 <kbd>Enter</kbd> 键，或在手机虚拟键盘上按下 <kbd>发送</kbd> 按钮，均会自动触发广播并清空输入框。
 </details>
 
