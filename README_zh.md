@@ -215,7 +215,17 @@ DLNA、AirPlay 或 Chromecast 音箱从空闲启动到音频会话激活存在�
 
 <details>
 <summary><b>6. 为什么 Google Cast / 智能音箱被成功唤醒（听到了连接拉起声），但随后没有发出任何语音？</b></summary>
-如果您将智能音箱或 IoT 设备划分在独立的 IoT VLAN（或子网）中，或者 Wi-Fi 开启了客户端设备隔离（Client Isolation），音箱虽然能够接收控制信令（TCP 8009）被正常唤醒拉起，但却会被防火墙拦截而无法向 Home Assistant 发起 HTTP/HTTPS 请求下载音频流。请确保您的路由器/防火墙放行了音箱访问 Home Assistant 的 <b>TCP 80 / 443 / 8123</b> 端口。
+这是 Google Cast 底层<b>“控制信令与媒体流拉取双通道分离”</b>的典型现象：
+<ul>
+  <li><b>通道一（控制信令 / Push）：</b>Home Assistant 通过 <code>TCP 8009</code> 端口主动向音箱发送指令唤醒播放器。只要您听到了音箱发出的“咚”拉起声，证明<b>该通道 100% 畅通</b>。</li>
+  <li><b>通道二（媒体拉取 / Pull）：</b>音箱唤醒后，转由音箱自身主动向 Home Assistant 发起 HTTP/HTTPS GET 请求（如 <code>http://&lt;HA_IP&gt;/api/tts_proxy/...mp3</code>）下载音频流。</li>
+</ul>
+如果您听到拉起声后陷入死寂，说明<b>通道二在反向拉取时失败了</b>。请按以下重点排查：
+<ol>
+  <li><b>IoT VLAN 防火墙单向阻断（最常见）：</b>在划分了 VLAN 的网络中，防火墙通常允许 主网络 &rarr; IoT（所以能拉起音箱），但默认禁止 IoT &rarr; 主网络。当音箱反向请求音频时被防火墙拦截。<b>解决对策：</b>在路由器中配置防火墙规则，放行音箱访问 HA 主机的 <b>TCP 80、443、8123</b> 端口。</li>
+  <li><b>Google 硬编码 DNS（8.8.8.8）：</b>Chromecast / Nest 固件在底层硬编码了 Google DNS（8.8.8.8），完全无视本地局域网分配的私有 DNS 服务器。如果 HA 的 <code>internal_url</code> 使用了 <code>.local</code> 或纯内网域名，音箱通过 8.8.8.8 根本无法解析。<b>解决对策：</b>确保 HA 的 <code>internal_url</code> 配置为<b>纯局域网 IP 地址</b>（如 <code>http://192.168.1.xxx</code>）或公网可解析域名。</li>
+  <li><b>无线 AP 客户端隔离（Client Isolation）：</b>如果音箱与 HA 处于同一 Wi-Fi，确保路由器未开启 AP 隔离，否则无线设备之间无法进行内网通信。</li>
+</ol>
 </details>
 
 ---

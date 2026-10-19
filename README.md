@@ -214,8 +214,18 @@ Yes! Pressing the <kbd>Enter</kbd> key on desktop or the <kbd>Send</kbd> action 
 </details>
 
 <details>
-<summary><b>6. Why does my Google Cast / smart speaker wake up (play connection chime) but produce no speech?</b></summary>
-If you keep your smart speakers or IoT devices on an isolated IoT VLAN/subnet, or if your Wi-Fi has Client Device Isolation enabled, the speaker may receive the control signal (TCP 8009) to wake up, but fail to connect back to Home Assistant to fetch the audio stream. Ensure your router/firewall allows traffic from the speaker to Home Assistant on <b>TCP port 80 / 443 / 8123</b>.
+<summary><b>6. Why does my Google Cast / Nest speaker wake up (play connection "ding") but produce no speech?</b></summary>
+This is a classic symptom of <b>Control Channel vs. Media Data Channel separation</b> in Google Cast:
+<ul>
+  <li><b>Channel 1 (Control / Push):</b> Home Assistant connects to the speaker via <code>TCP 8009</code> to launch the media receiver. Hearing the speaker's hardware chime/ding confirms this channel is working perfectly.</li>
+  <li><b>Channel 2 (Streaming / Pull):</b> Once launched, the speaker itself initiates an HTTP/HTTPS GET request back to Home Assistant (e.g. <code>http://&lt;HA_IP&gt;/api/tts_proxy/...mp3</code>) to download and play the audio stream.</li>
+</ul>
+If you hear the wake-up chime followed by dead silence, <b>Channel 2 is failing</b>. Check the following:
+<ol>
+  <li><b>VLAN Firewall / One-Way Deadlock (Most Common):</b> In segmented networks (IoT VLAN vs. LAN), firewalls often allow LAN &rarr; IoT (letting HA wake the speaker), but drop IoT &rarr; LAN traffic. You must add a firewall rule allowing the speaker to connect to Home Assistant on <b>TCP port 80, 443, and 8123</b>.</li>
+  <li><b>Hardcoded Google DNS (8.8.8.8):</b> Google Cast devices hardcode Google Public DNS and ignore DHCP-assigned local DNS servers. If your Home Assistant URL uses <code>.local</code> or an unresolvable internal hostname, the speaker cannot resolve it. Ensure your HA <code>internal_url</code> is set to a raw IP address (e.g. <code>http://192.168.1.xxx</code>) or a publicly resolvable domain.</li>
+  <li><b>Wi-Fi Client Device Isolation:</b> Ensure AP Client Isolation is disabled on the speaker's Wi-Fi network, as it blocks device-to-device LAN communication.</li>
+</ol>
 </details>
 
 ---
