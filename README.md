@@ -34,6 +34,7 @@
 - 🔊 **Interactive In-Card Volume Control**: Adjust broadcast volume directly from the card via an interactive volume pill and mini slider. Click the pill to toggle mute/restore with persistent memory. Chosen volume is automatically remembered per speaker in browser local storage.
 - 🎛️ **Hardware Volume Delegation (`volume_entity`)**: Seamlessly decouple UPnP/DLNA media streaming from native hardware amplifier volume controls (ideal for Devialet Phantom, KEF, Sonos, or custom AV receivers with separate controller and player entities).
 - 🔈 **Smart Auto-Unmute Before Broadcast (`auto_unmute`)**: Automatically sends an un-mute command to the hardware volume entity before speech starts, ensuring critical announcements and security alerts are never missed.
+- 🔁 **Smart Volume Restoration (`restore_volume`)**: Automatically captures the speaker's original volume (and mute status) before broadcasting, plays the message at the card's chosen slider volume, and restores the original volume when speech playback finishes. Features a built-in collision lock for rapid consecutive broadcasts to prevent overwriting saved volume.
 - 🛑 **Intelligent Auto-Stop & Session Release (`auto_stop`)**: Releases UPnP/DLNA session locks after speech playback finishes so smart speakers (e.g. Devialet Phantom, Sonos) automatically switch back to TV Optical (TOSLink) or HDMI eARC inputs. Includes automatic `supported_features` bitmask detection (STOP vs PAUSE) to ensure zero 400 Bad Request errors.
 - 🔔 **Pre-Broadcast Notification Chime**: Plays a chime/bell sound before speaking, with a configurable speaker transition buffer (`chime_delay`) to prevent audio cut-offs on DLNA, Google Cast, Sonos, or AirPlay speakers.
 - 🌐 **Microsoft Edge TTS Neural Voice Auto-Detection**: Automatically detects input language and routes to native neural voices:
@@ -114,6 +115,7 @@ Add a new card to your dashboard and select **TTS Broadcast Card**. The visual e
 2. **Volume & Sound Control**:
    - `volume_level`: Default broadcast volume slider (0% ~ 100%, step 5, default 40%).
    - `show_volume_control`: Toggle in-card interactive volume pill and slider.
+   - `restore_volume`: Automatically capture and restore original volume (and mute state) after playback.
    - `volume_entity` (*Optional*): Hardware volume entity override (e.g. amplifier or Devialet controller).
    - `auto_unmute`: Automatically un-mute speaker before broadcast.
    - `auto_stop`: Release UPnP/DLNA session after speech so TV Optical / HDMI eARC restores automatically.
@@ -139,6 +141,7 @@ media_player: media_player.living_room_player
 volume_entity: media_player.living_room_controller # Optional: separate amplifier / controller entity
 volume_level: 45
 show_volume_control: true
+restore_volume: true # Optional: restore original speaker volume after broadcast
 auto_unmute: true
 auto_stop: true
 tts_entity: tts.edge_tts
@@ -167,6 +170,7 @@ active_icon: mdi:volume-high
 | `placeholder` | string | `Message...` | Text box placeholder text. |
 | `volume_level` | number | `40` | Default broadcast volume percentage (0 - 100%). |
 | `show_volume_control` | boolean | `true` | Show interactive volume pill and slider directly on the card. |
+| `restore_volume` | boolean | `false` | Automatically restore speaker's original volume and prior mute status after broadcast finishes. |
 | `volume_entity` | string | *None* | Optional hardware volume entity ID for dual-entity speaker setups. |
 | `auto_unmute` | boolean | `true` | Automatically un-mute speaker before broadcasting. |
 | `auto_stop` | boolean | `true` | Automatically release UPnP session after playback to restore TV optical sound. |
@@ -225,6 +229,17 @@ If you hear the wake-up chime followed by dead silence, <b>Channel 2 is failing<
   <li><b>VLAN Firewall / One-Way Deadlock (Most Common):</b> In segmented networks (IoT VLAN vs. LAN), firewalls often allow LAN &rarr; IoT (letting HA wake the speaker), but drop IoT &rarr; LAN traffic. You must add a firewall rule allowing the speaker to connect to Home Assistant on <b>TCP port 80, 443, and 8123</b>.</li>
   <li><b>Hardcoded Google DNS (8.8.8.8):</b> Google Cast devices hardcode Google Public DNS and ignore DHCP-assigned local DNS servers. If your Home Assistant URL uses <code>.local</code> or an unresolvable internal hostname, the speaker cannot resolve it. Ensure your HA <code>internal_url</code> is set to a raw IP address (e.g. <code>http://192.168.1.xxx</code>) or a publicly resolvable domain.</li>
   <li><b>Wi-Fi Client Device Isolation:</b> Ensure AP Client Isolation is disabled on the speaker's Wi-Fi network, as it blocks device-to-device LAN communication.</li>
+</ol>
+</details>
+
+<details>
+<summary><b>7. How does Volume Restoration (<code>restore_volume</code>) work?</b></summary>
+When <code>restore_volume: true</code> is enabled:
+<ol>
+  <li><b>Pre-Broadcast Snapshot:</b> Right before the card un-mutes or sets the broadcast volume, it records the current volume level and mute status of the target speaker (or <code>volume_entity</code>).</li>
+  <li><b>Target Playback:</b> The message is broadcast at the volume chosen on the card's interactive slider.</li>
+  <li><b>Post-Playback Recovery:</b> Once speech finishes (synchronized with the calculated message duration and <code>auto_stop</code>), the card restores the speaker to its exact original volume level, and re-engages mute if the speaker was originally muted.</li>
+  <li><b>Rapid Consecutive Broadcast Protection:</b> If multiple messages are dispatched in quick succession before the first broadcast finishes, the card locks onto the genuine initial volume and extends the restoration timer, preventing the active broadcast volume from erroneously overwriting the saved state.</li>
 </ol>
 </details>
 

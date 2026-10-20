@@ -1,14 +1,14 @@
 /**
  * TTS Broadcast Card
  * Repository: https://github.com/lucayunxiao/tts-broadcast-card
- * Version: 1.1.0
+ * Version: 1.2.0
  * License: MIT
  *
  * A sleek, reactive text-to-speech broadcast card for Home Assistant Lovelace
  * featuring native zero-script orchestration, interactive volume controls,
- * hardware volume delegation, auto-unmute, UPnP auto-stop session release,
- * chime playback, Microsoft Edge TTS neural multi-language voice detection,
- * graphical configuration, and live state feedback.
+ * hardware volume delegation, auto-unmute, restore volume after broadcast,
+ * UPnP auto-stop session release, chime playback, Microsoft Edge TTS neural
+ * multi-language voice detection, graphical configuration, and live state feedback.
  */
 
 const SCHEMA = [
@@ -54,6 +54,11 @@ const SCHEMA = [
       {
         name: "show_volume_control",
         label: "Show Interactive Volume Control on Card",
+        selector: { boolean: {} }
+      },
+      {
+        name: "restore_volume",
+        label: "Restore Original Volume After Broadcast",
         selector: { boolean: {} }
       },
       {
@@ -256,6 +261,9 @@ class TtsBroadcastCard extends HTMLElement {
     this._ticker = null;
     this._currentVolume = undefined;
     this._lastNonZeroVolume = 40;
+    this._savedPriorVolume = null;
+    this._savedPriorMute = null;
+    this._restoreTimer = null;
   }
 
   static getConfigElement() {
@@ -278,6 +286,7 @@ class TtsBroadcastCard extends HTMLElement {
       placeholder: "Message...",
       volume_level: 40,
       show_volume_control: true,
+      restore_volume: false,
       auto_unmute: true,
       auto_stop: true,
       chime_enabled: true,
@@ -318,6 +327,7 @@ class TtsBroadcastCard extends HTMLElement {
       chime_delay: 3.5,
       volume_level: 40,
       show_volume_control: true,
+      restore_volume: false,
       auto_unmute: true,
       auto_stop: true,
       ...config
@@ -352,6 +362,11 @@ class TtsBroadcastCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    if (this._restoreTimer) {
+      clearTimeout(this._restoreTimer);
+      this._restoreTimer = null;
+      this._restoreVolumeState();
+    }
     this._clearTimers();
   }
 
@@ -748,6 +763,68 @@ class TtsBroadcastCard extends HTMLElement {
     `;
   }
 
+  async _performAutoStop() {
+    const stopEntity = this._config.stop_entity || this._config.volume_entity || this._config.media_player;
+    const entityObj = this._hass && this._hass.states && this._hass.states[stopEntity];
+    const features = (entityObj && entityObj.attributes && entityObj.attributes.supported_features) || 0;
+    // MediaPlayerEntityFeature: STOP = 4096 (or 2048 in older HA), PAUSE = 1
+    const supportsStop = (features & 4096) !== 0 || (features & 2048) !== 0;
+    const supportsPause = (features & 1) !== 0;
+
+    try {
+      if (supportsStop) {
+        await this._hass.callService(
+          "media_player",
+          "media_stop",
+          {},
+          { entity_id: stopEntity }
+        );
+      } else if (supportsPause) {
+        await this._hass.callService(
+          "media_player",
+          "media_pause",
+          {},
+          { entity_id: stopEntity }
+        );
+      }
+    } catch (stopErr) {
+      console.warn("Auto-stop safe notice:", stopErr);
+    }
+  }
+
+  async _restoreVolumeState() {
+    if (this._savedPriorVolume === null) return;
+    const volToRestore = this._savedPriorVolume;
+    const muteToRestore = this._savedPriorMute;
+    this._savedPriorVolume = null;
+    this._savedPriorMute = null;
+
+    const volumeEntity = this._config.volume_entity || this._config.media_player;
+    try {
+      await this._hass.callService(
+        "media_player",
+        "volume_set",
+        { volume_level: volToRestore },
+        { entity_id: volumeEntity }
+      );
+    } catch (err) {
+      console.warn("Restore volume failed:", err);
+    }
+
+    if (muteToRestore === true && this._config.auto_unmute !== false) {
+      try {
+        await this._hass.callService(
+          "media_player",
+          "volume_mute",
+          { is_volume_muted: true },
+          { entity_id: volumeEntity }
+        );
+      } catch (mErr) {
+        console.warn("Restore mute failed:", mErr);
+      }
+    }
+  }
+
   async _handleSend() {
     const input = this.shadowRoot?.getElementById("msgInput");
     if (!input) return;
@@ -765,6 +842,24 @@ class TtsBroadcastCard extends HTMLElement {
       const targetVol = this._currentVolume !== undefined ? this._currentVolume : Number(this._config.volume_level ?? 40);
       const volDecimal = Math.max(0, Math.min(1, targetVol / 100));
       const volumeEntity = this._config.volume_entity || this._config.media_player;
+
+      // Capture prior volume and mute status before modifying (with back-to-back collision lock)
+      if (this._config.restore_volume) {
+        const entityObj = this._hass && this._hass.states && this._hass.states[volumeEntity];
+        const currentVol = entityObj?.attributes?.volume_level;
+        const currentMute = entityObj?.attributes?.is_volume_muted;
+
+        if (this._savedPriorVolume === null && typeof currentVol === "number") {
+          this._savedPriorVolume = currentVol;
+          this._savedPriorMute = typeof currentMute === "boolean" ? currentMute : false;
+        }
+      }
+
+      // Clear any pending restore timer from previous broadcast so it doesn't interrupt this broadcast
+      if (this._restoreTimer) {
+        clearTimeout(this._restoreTimer);
+        this._restoreTimer = null;
+      }
 
       // Optional input_text synchronization if configured
       if (this._config.input_text) {
@@ -784,6 +879,13 @@ class TtsBroadcastCard extends HTMLElement {
             volume: volDecimal
           }
         );
+        if (this._config.restore_volume) {
+          const estDurationMs = Math.max(5000, text.length * 280) + 2000;
+          this._restoreTimer = setTimeout(async () => {
+            await this._restoreVolumeState();
+            this._restoreTimer = null;
+          }, estDurationMs);
+        }
       } else {
         // Native Zero-Script Broadcast Pipeline
         const mediaPlayer = this._config.media_player;
@@ -861,36 +963,17 @@ class TtsBroadcastCard extends HTMLElement {
           { entity_id: ttsEntity }
         );
 
-        // Stage 5: Release UPnP / DLNA session lock after broadcast so TV optical recovers
-        if (this._config.auto_stop !== false) {
-          const estDurationMs = Math.max(5000, text.length * 280) + 2000;
-          setTimeout(async () => {
-            const stopEntity = this._config.stop_entity || this._config.volume_entity || mediaPlayer;
-            const entityObj = this._hass && this._hass.states && this._hass.states[stopEntity];
-            const features = (entityObj && entityObj.attributes && entityObj.attributes.supported_features) || 0;
-            // MediaPlayerEntityFeature: STOP = 4096 (or 2048 in older HA), PAUSE = 1
-            const supportsStop = (features & 4096) !== 0 || (features & 2048) !== 0;
-            const supportsPause = (features & 1) !== 0;
-
-            try {
-              if (supportsStop) {
-                await this._hass.callService(
-                  "media_player",
-                  "media_stop",
-                  {},
-                  { entity_id: stopEntity }
-                );
-              } else if (supportsPause) {
-                await this._hass.callService(
-                  "media_player",
-                  "media_pause",
-                  {},
-                  { entity_id: stopEntity }
-                );
-              }
-            } catch (stopErr) {
-              console.warn("Auto-stop safe notice:", stopErr);
+        // Stage 5: Post-broadcast session release and volume restoration
+        const estDurationMs = Math.max(5000, text.length * 280) + 2000;
+        if (this._config.auto_stop !== false || this._config.restore_volume) {
+          this._restoreTimer = setTimeout(async () => {
+            if (this._config.auto_stop !== false) {
+              await this._performAutoStop();
             }
+            if (this._config.restore_volume) {
+              await this._restoreVolumeState();
+            }
+            this._restoreTimer = null;
           }, estDurationMs);
         }
       }
@@ -948,6 +1031,13 @@ class TtsBroadcastCard extends HTMLElement {
 
       // Hard timeout guard (18 seconds maximum failsafe)
       if (elapsed > 18000) {
+        if (this._restoreTimer) {
+          clearTimeout(this._restoreTimer);
+          this._restoreTimer = null;
+        }
+        if (this._config.restore_volume && this._savedPriorVolume !== null) {
+          this._restoreVolumeState();
+        }
         this._endSession();
         return;
       }

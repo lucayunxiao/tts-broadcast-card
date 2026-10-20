@@ -34,6 +34,7 @@
 - 🔊 **卡片内置交互式音量控制（In-Card Volume Control）**：卡片表面直接集成音量胶囊按钮与平滑调节滑块，支持点击胶囊一键静音/还原，并按音箱实体在本地浏览器（`localStorage`）持久化记忆用户音量偏好。
 - 🎛️ **硬件音量控制分离委托 (`volume_entity`)**：支持将播报媒体流与实体音箱硬件音量解耦。专为帝瓦雷 Devialet Phantom（Controller 主控实体 + Player UPnP 播放流实体）、KEF、Sonos 或功放等双实体架构量身定制。
 - 🔈 **播报前智能自动解静音 (`auto_unmute`)**：在发送音量调节与播报指令前，主动向硬件实体发送 `media_player.volume_mute(is_volume_muted: false)`，确保重要提醒或安防告警绝不因昨夜静音而漏听。
+- 🔁 **智能音量记忆与自动还原 (`restore_volume`)**：播报前精准捕获音箱当前音量与静音状态，在播报期间调用卡片滑块设定的大音量，播报完成后全自动恢复原始音量与原静音状态。内置多消息连续连发碰撞防丢锁，彻底避免后续语音覆盖真实初始音量。
 - 🛑 **智能释放音频通道与会话 (`auto_stop`)**：彻底解决 DLNA/UPnP 播报后音箱会话持续占线、导致电视光纤（Optical TOSLink）或 HDMI eARC 无法自动切回的痛点。内置 `supported_features` 二进制位掩码嗅探（位 4096/2048 判断 STOP，位 1 判断 PAUSE），在保障 0 报错（杜绝 400 Bad Request）的同时安全释放音频通道。
 - 🔔 **前置提示音（Notification Chime）**：支持在语音朗读前播放提示音或电台钟声，提供硬件缓冲延时滑动条（`chime_delay`），有效防止 DLNA、Chromecast、Sonos、HomePod 音箱在切换音频会话时吞字断音。
 - 🌐 **微软 Edge TTS 多语言智能声线嗅探**：根据输入文本自动匹配高拟真度神经网络声线，无须人工繁琐配置：
@@ -114,6 +115,7 @@
 2. **音量与声音控制 (Volume & Sound Control)**：
    - `volume_level`：默认广播音量滑动条（0% ~ 100%，步长 5，默认 40%）。
    - `show_volume_control`：卡片表面是否显示交互式音量胶囊与调节滑块开关。
+   - `restore_volume`：播报完成后是否自动恢复播报前的原始音量与静音状态。
    - `volume_entity`（可选）：独立硬件音量实体（如外置功放或帝瓦雷主控实体）。
    - `auto_unmute`：播报前是否自动解除静音。
    - `auto_stop`：播报完成后是否自动停止/释放 UPnP 会话，以便恢复电视光纤音频。
@@ -139,6 +141,7 @@ media_player: media_player.living_room_player
 volume_entity: media_player.living_room_controller # 可选：独立硬件主控/功放音量实体
 volume_level: 45
 show_volume_control: true
+restore_volume: true # 可选：播报完毕后全自动恢复播报前的原始音量与静音
 auto_unmute: true
 auto_stop: true
 tts_entity: tts.edge_tts
@@ -167,6 +170,7 @@ active_icon: mdi:volume-high
 | `placeholder` | string | `Message...` | 输入框空值提示占位符。 |
 | `volume_level` | number | `40` | 默认广播音量百分比（0 - 100%）。 |
 | `show_volume_control` | boolean | `true` | 是否在卡片表面显示交互式音量胶囊按钮与滑块。 |
+| `restore_volume` | boolean | `false` | 播报完成后是否自动恢复播报前的原始音量及静音状态。 |
 | `volume_entity` | string | *无* | 可选独立硬件音量控制实体（用于与音频流实体解耦）。 |
 | `auto_unmute` | boolean | `true` | 播报前是否先向音箱发送解除静音指令。 |
 | `auto_stop` | boolean | `true` | 播报结束后是否自动停止会话，以便音箱自动切回电视光纤音频。 |
@@ -225,6 +229,17 @@ DLNA、AirPlay 或 Chromecast 音箱从空闲启动到音频会话激活存在�
   <li><b>IoT VLAN 防火墙单向阻断（最常见）：</b>在划分了 VLAN 的网络中，防火墙通常允许 主网络 &rarr; IoT（所以能拉起音箱），但默认禁止 IoT &rarr; 主网络。当音箱反向请求音频时被防火墙拦截。<b>解决对策：</b>在路由器中配置防火墙规则，放行音箱访问 HA 主机的 <b>TCP 80、443、8123</b> 端口。</li>
   <li><b>Google 硬编码 DNS（8.8.8.8）：</b>Chromecast / Nest 固件在底层硬编码了 Google DNS（8.8.8.8），完全无视本地局域网分配的私有 DNS 服务器。如果 HA 的 <code>internal_url</code> 使用了 <code>.local</code> 或纯内网域名，音箱通过 8.8.8.8 根本无法解析。<b>解决对策：</b>确保 HA 的 <code>internal_url</code> 配置为<b>纯局域网 IP 地址</b>（如 <code>http://192.168.1.xxx</code>）或公网可解析域名。</li>
   <li><b>无线 AP 客户端隔离（Client Isolation）：</b>如果音箱与 HA 处于同一 Wi-Fi，确保路由器未开启 AP 隔离，否则无线设备之间无法进行内网通信。</li>
+</ol>
+</details>
+
+<details>
+<summary><b>7. 音量恢复机制 (<code>restore_volume</code>) 的运作原理是什么？</b></summary>
+当卡片开启 <code>restore_volume: true</code> 后：
+<ol>
+  <li><b>播报前快照：</b>在卡片调整音量或解除静音的瞬间，首先读取音箱（或 <code>volume_entity</code>）当前的音量百分比与静音状态。</li>
+  <li><b>目标播报：</b>调用卡片滑块选择的设定音量执行语音与提示音朗读。</li>
+  <li><b>播报后还原：</b>播报完毕后（与计算出的文本发音耗时及 <code>auto_stop</code> 同步触发），卡片向实体发送指令恢复原始音量；若音箱原先处于静音状态，亦会自动重新恢复静音。</li>
+  <li><b>连续广播碰撞保护：</b>若在前一条语音尚未播完时再次快速点击发送，卡片会自动锁定最初读取的真实音量，并顺延恢复定时器，避免将播报中的临时大音量误当成原始音量写入。</li>
 </ol>
 </details>
 
