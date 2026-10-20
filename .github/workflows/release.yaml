@@ -20,5 +20,4 @@ jobs:
         with:
           files: |
             dist/tts-broadcast-card.js
-            tts-broadcast-card.js
           generate_release_notes: true
