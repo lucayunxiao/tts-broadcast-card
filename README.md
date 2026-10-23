@@ -173,10 +173,10 @@ active_icon: mdi:volume-high
 | `volume_level` | number | `40` | Default broadcast volume percentage (0 - 100%). |
 | `show_volume_control` | boolean | `true` | Show interactive volume pill and slider directly on the card. |
 | `restore_volume` | boolean | `false` | Automatically restore speaker's original volume and prior mute status after broadcast finishes. |
-| `volume_entity` | string | *None* | Optional hardware volume entity ID for dual-entity speaker setups. |
+| `volume_entity` | string | *None* | Optional hardware volume controller entity (e.g. AV receiver or active speaker master controller). Reroutes volume read, adjustment, mute, and post-broadcast restore commands to this entity. |
 | `auto_unmute` | boolean | `true` | Automatically un-mute speaker before broadcasting. |
 | `auto_stop` | boolean | `true` | Automatically release UPnP session after playback to restore TV optical sound. |
-| `stop_entity` | string | *None* | Optional override entity for Auto-Stop session release (defaults to volume_entity or media_player). |
+| `stop_entity` | string | *None* | Dedicated entity override for Auto-Stop session release (defaults to `volume_entity` or `media_player`). Prevents 400 Bad Request errors on amplifiers while freeing UPnP locks. |
 | `chime_enabled` | boolean | `true` | Whether to play a pre-broadcast notification sound. |
 | `chime_url` | string | `media-source://media_source/local/notification.mp3` | Audio URL or path for notification chime. |
 | `chime_delay` | number | `3.5` | Transition delay (in seconds) between chime and speech. |
@@ -188,8 +188,186 @@ active_icon: mdi:volume-high
 | `button_icon` | string | `mdi:bullhorn` | Idle state icon. |
 | `badge_icon` | string | `mdi:send` | Idle state badge icon. |
 | `active_icon` | string | `mdi:volume-high` | Active broadcasting icon. |
-| `script` | string | *None* | Advanced: Custom script entity to override native pipeline. |
-| `input_text` | string | *None* | Advanced: Optional helper entity to mirror message text. |
+| `script` | string | *None* | Advanced: Custom script entity to override native pipeline. Automatically receives `message` (string) and `volume` (float 0.0 - 1.0) variables. |
+| `input_text` | string | *None* | Advanced: Optional helper entity (`input_text.xxx`) to sync broadcasted message text for history display and automation chaining. |
+
+---
+
+## 🎛️ Multi-Entity Audio Architecture (`volume_entity` & `stop_entity`)
+
+Standard smart speakers (such as Google Nest, HomePod, or Echo) combine streaming, volume control, and session lifecycle into a single `media_player` entity.
+
+However, in **Hi-Fi setups, audiophile speakers (e.g. Devialet Phantom, KEF), home theater AV receivers (Denon, Yamaha), or external network streamers (WiiM Pro, HiFiBerry)**, Home Assistant typically represents the hardware as **distinct, specialized entities**:
+
+```mermaid
+flowchart TD
+    Card["TTS Broadcast Card (Front-End Control Center)"]
+
+    subgraph Targets ["Multi-Entity Architecture Responsibilities"]
+        Streamer["1. Streaming Receiver (media_player)<br/>• Role: Network audio endpoint (UPnP / DLNA / Cast)<br/>• Receives: play_media (Chime) & tts.speak"]
+        Amplifier["2. Hardware Volume Controller (volume_entity)<br/>• Role: DAC / physical amplifier master control<br/>• Receives: volume_set & volume_mute (unmute & restore)"]
+        Stopper["3. Session Release Controller (stop_entity)<br/>• Role: media_stop execution target<br/>• Triggers: Session teardown & TV Optical / eARC autoswitch"]
+    end
+
+    Card -->|"Stream Audio"| Streamer
+    Card -->|"Read / Set / Restore Volume"| Amplifier
+    Card -->|"Release Session"| Stopper
+```
+
+### Problem & Solution Matrix
+
+| Option | Architecture Role | Real-World Problem Solved |
+| :--- | :--- | :--- |
+| **`media_player`**<br/>*(Required)* | **Streaming Receiver** | Network endpoint that receives TTS audio streams and chime MP3s (e.g., DLNA Digital Media Renderer or Cast target). |
+| **`volume_entity`**<br/>*(Optional)* | **Hardware Volume Controller** | **Pain Point**: Streaming endpoints often lack hardware volume control or use digital attenuation that severely degrades audio dynamic range. The physical DAC/Amp volume is owned by a separate controller.<br/>**Solution**: Directs initial volume capture, slider adjustments, pre-broadcast auto-unmute, and post-broadcast volume restoration straight to the physical amplifier. |
+| **`stop_entity`**<br/>*(Optional)* | **Session Release Target** | **Pain Point**: To allow speakers to switch back to TV Optical / HDMI eARC, an active UPnP stream must be stopped (`media_stop`). If only `volume_entity` is configured (pointing to an AV receiver or master controller), `media_stop` would be dispatched to the receiver—**which throws an HTTP 400 Bad Request error because pure amplifiers do not support media playback control**.<br/>**Solution**: By setting `stop_entity` back to the streaming receiver, the UPnP session is cleanly terminated with zero errors, triggering the speaker's optical autoswitch. |
+
+### Real-World Hardware Examples
+
+#### Example A: Devialet Phantom / Arch Stereo Pair (Seamless TV Optical Autoswitch)
+- **Streaming endpoint**: `media_player.devialet_upnp` (receives UPnP audio stream)
+- **Master controller**: `media_player.devialet_controller` (official Devialet integration; controls physical DAC volume, standby, and mute)
+- **Session stopper**: `media_player.devialet_upnp` (sends `media_stop` to close UPnP session so Phantom autoswitches back to TV Optical)
+
+```yaml
+type: custom:tts-broadcast-card
+media_player: media_player.devialet_upnp          # Stream TTS and chime here
+volume_entity: media_player.devialet_controller   # Hardware volume & un-mute
+stop_entity: media_player.devialet_upnp           # Stop UPnP to restore TV Optical input
+auto_stop: true
+restore_volume: true
+```
+
+#### Example B: External Network Streamer (WiiM / HiFiBerry) + Home Theater AV Receiver
+- **Streaming endpoint**: `media_player.wiim_pro_dlna` (WiiM streamer connected to AVR AUX/Optical input)
+- **Master volume**: `media_player.denon_avr` (AV receiver controlling main room volume and mute)
+- **Session stopper**: `media_player.wiim_pro_dlna` (releases WiiM streaming queue without erroring on the Denon AVR)
+
+```yaml
+type: custom:tts-broadcast-card
+media_player: media_player.wiim_pro_dlna   # Send audio to WiiM DLNA streamer
+volume_entity: media_player.denon_avr      # Control physical Denon master volume
+stop_entity: media_player.wiim_pro_dlna    # Stop WiiM playback after speech
+auto_unmute: true
+restore_volume: true
+```
+
+---
+
+## 🚀 Advanced Workflows (`script` & `input_text`)
+
+The **Advanced Settings** decouple the card's sleek frontend interface from Home Assistant's backend automation engine, unlocking advanced multi-room, cross-device, and historical tracking scenarios.
+
+### 1. Synchronizing Broadcast Text (`input_text`)
+
+#### How It Works:
+Whenever an announcement is dispatched via the card (by pressing <kbd>Enter</kbd> or clicking the button), the card calls `input_text.set_value` to immediately mirror the broadcast message into a Home Assistant text helper entity.
+
+#### Use Cases:
+1. **Dashboard History Display**: Show "Last Announcement" on dashboards using a standard Markdown or Entities card, so family members who missed the audio can easily read what was broadcast.
+2. **Downstream Automation Chaining**: Trigger automations whenever `input_text` changes—e.g., dispatch mobile push notifications, display on electronic ink displays, or flash smart light strips.
+
+#### Ready-to-Use Configuration:
+
+**Step 1: Create a Text Helper in Home Assistant**  
+Navigate to **Settings > Devices & services > Helpers > Create helper > Text**, with Entity ID `input_text.last_broadcast_message`.
+
+**Step 2: Bind in Card Configuration**
+```yaml
+type: custom:tts-broadcast-card
+media_player: media_player.living_room_speaker
+input_text: input_text.last_broadcast_message # 🌟 Synchronizes text here
+```
+
+**Step 3: Downstream Automation (Push to Mobile App)**
+```yaml
+alias: "Mirror Broadcast to Mobile App"
+description: "Dispatches mobile push notification whenever a card announcement is made"
+trigger:
+  - platform: state
+    entity_id: input_text.last_broadcast_message
+condition:
+  - condition: template
+    value_template: "{{ trigger.to_state.state != '' }}"
+action:
+  - action: notify.notify
+    data:
+      title: "📢 Home Broadcast"
+      message: "{{ states('input_text.last_broadcast_message') }}"
+```
+
+---
+
+### 2. Custom Backend Pipeline (`script`)
+
+#### How It Works:
+By default, the card uses its built-in **Zero-Script** pipeline (capturing volume, auto-unmuting, playing chime, awaiting buffer, speaking TTS via Edge TTS, and auto-stopping).
+
+When `script: script.my_broadcast` is configured, the card **delegates execution directly to your custom Home Assistant script**, automatically passing two variables in the service `data`:
+- `message` (string): The text typed in the card's input field.
+- `volume` (float, `0.0` - `1.0`): The exact volume selected on the card's interactive slider.
+
+#### Why Combine the Card with a Custom Script?
+The card provides a **polished, responsive front-end user experience** (single-line compact UI, interactive volume pill, local volume persistence, IME-safe Enter-to-send, and pulsing glow animations);  
+Meanwhile, your backend `script` provides **limitless automation control**:
+- **Multi-room broadcast sync**: Broadcast to 5 speakers simultaneously while flashing hallway lights.
+- **Audio Ducking**: Automatically pause Spotify/music, play announcement, then resume music playback.
+- **Do-Not-Disturb / Night Quiet Hours**: Route announcements to mobile notifications instead of waking sleeping family members after 10 PM.
+- **Custom TTS Engine**: Route speech through local Piper TTS or self-hosted OpenAI TTS.
+
+#### Ready-to-Use Configuration:
+
+**Step 1: Add Custom Script to `scripts.yaml`**
+```yaml
+living_room_smart_broadcast:
+  alias: "Smart Linked Broadcast Script"
+  description: "Receives message and volume from TTS Broadcast Card for multi-device broadcast"
+  fields:
+    message:
+      description: "Broadcast message text"
+      example: "Dinner is ready!"
+    volume:
+      description: "Target volume level (0.0 to 1.0)"
+      example: 0.65
+  sequence:
+    # 1. Flash living room ambient light to grab attention
+    - action: light.toggle
+      target:
+        entity_id: light.living_room_ambient
+    # 2. Adjust speaker volume to the card slider level
+    - action: media_player.volume_set
+      target:
+        entity_id: media_player.living_room_speaker
+      data:
+        volume_level: "{{ volume }}"
+    # 3. Play local chime
+    - action: media_player.play_media
+      target:
+        entity_id: media_player.living_room_speaker
+      data:
+        media_content_id: media-source://media_source/local/bell.mp3
+        media_content_type: music
+    - delay: "00:00:02"
+    # 4. Speak message using local Piper TTS
+    - action: tts.speak
+      target:
+        entity_id: tts.piper
+      data:
+        media_player_entity_id: media_player.living_room_speaker
+        message: "{{ message }}"
+    # 5. Push notification to mobile phone
+    - action: notify.notify
+      data:
+        message: "Broadcast: {{ message }}"
+```
+
+**Step 2: Card Configuration**
+```yaml
+type: custom:tts-broadcast-card
+media_player: media_player.living_room_speaker # Target speaker for status display
+script: script.living_room_smart_broadcast      # 🌟 Receives 'message' & 'volume' automatically
+input_text: input_text.last_broadcast_message   # Optional: keep history log
+```
 
 ---
 
@@ -207,7 +385,15 @@ When streaming TTS or chime via UPnP/DLNA, the player remains in an active sessi
 
 <details>
 <summary><b>3. How do I configure dual-entity media players (e.g. Devialet Phantom controller vs UPnP player)?</b></summary>
-Many high-end audio setups split duties across two entities: a UPnP/DLNA streaming player (e.g. <code>media_player.devialet_player</code>) and a hardware master controller (e.g. <code>media_player.devialet_controller</code>). In the card configuration, assign <code>media_player</code> to your streaming player and <code>volume_entity</code> to your controller. The card will seamlessly route media playback to the player while directing volume adjustments and auto-unmute commands to the hardware controller.
+Many high-end audio setups split duties across two or three entities: a streaming player (e.g. <code>media_player.devialet_player</code>), a hardware master controller (e.g. <code>media_player.devialet_controller</code>), and an Auto-Stop session target.
+
+In your card configuration:
+<ul>
+  <li>Assign <code>media_player</code> to your streaming player (handles audio playback).</li>
+  <li>Assign <code>volume_entity</code> to your hardware controller (handles volume reading, adjusting, un-muting, and restoration).</li>
+  <li>Assign <code>stop_entity</code> to your streaming player (ensures <code>media_stop</code> cleanly releases UPnP without triggering 400 Bad Request errors on the controller).</li>
+</ul>
+See <a href="#%EF%B8%8F-multi-entity-audio-architecture-volume_entity--stop_entity">Multi-Entity Audio Architecture</a> for complete architectural diagrams and YAML examples.
 </details>
 
 <details>

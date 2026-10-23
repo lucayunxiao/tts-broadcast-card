@@ -173,12 +173,12 @@ active_icon: mdi:volume-high
 | `volume_level` | number | `40` | 默认广播音量百分比（0 - 100%）。 |
 | `show_volume_control` | boolean | `true` | 是否在卡片表面显示交互式音量胶囊按钮与滑块。 |
 | `restore_volume` | boolean | `false` | 播报完成后是否自动恢复播报前的原始音量及静音状态。 |
-| `volume_entity` | string | *无* | 可选独立硬件音量控制实体（用于与音频流实体解耦）。 |
+| `volume_entity` | string | *无* | 可选独立硬件音量控制实体（如外置功放或帝瓦雷主控实体）。音量读取/设置/恢复及静音状态均路由至此实体。 |
 | `auto_unmute` | boolean | `true` | 播报前是否先向音箱发送解除静音指令。 |
 | `auto_stop` | boolean | `true` | 播报结束后是否自动停止会话，以便音箱自动切回电视光纤音频。 |
-| `stop_entity` | string | *无* | 可选独立的会话停止/释放控制实体（默认回退至 volume_entity 或 media_player）。 |
+| `stop_entity` | string | *无* | 可选独立的会话停止/释放控制实体（如数播/串流端）。避免向不支持停止指令的纯功放发指令报错，同时确保音箱恢复电视光纤/eARC。 |
 | `chime_enabled` | boolean | `true` | 是否在播报前播放提示音。 |
-| `chime_url` | string | `media-source://...` | 提示声音频文件路径或网络直链。 |
+| `chime_url` | string | `media-source://media_source/local/notification.mp3` | 提示声音频文件路径或网络直链。 |
 | `chime_delay` | number | `3.5` | 提示音播放完毕后等待音箱清空缓冲的时长（秒）。 |
 | `title` | string | `Broadcast` | 按钮主标题文字。 |
 | `subtitle` | string | 播放器名称 | 按钮副标题文字（留空默认显示音箱友好名称）。 |
@@ -188,8 +188,186 @@ active_icon: mdi:volume-high
 | `button_icon` | string | `mdi:bullhorn` | 按钮空闲状态图标。 |
 | `badge_icon` | string | `mdi:send` | 按钮右上角就绪角标图标。 |
 | `active_icon` | string | `mdi:volume-high` | 播报中的声波主图标。 |
-| `script` | string | *无* | 高级模式：自定义后台脚本实体（保留向后兼容）。 |
-| `input_text` | string | *无* | 高级模式：同步消息文本的 helper 实体。 |
+| `script` | string | *无* | 高级模式：可选自定义后台广播脚本实体（接管原生流水线）。自动向脚本传递 `message`（文本）与 `volume`（浮点数 0.0-1.0）变量。 |
+| `input_text` | string | *无* | 高级模式：可选文本辅助实体（`input_text.xxx`），自动同步广播文本，用于仪表盘历史展示与下游自动化联动。 |
+
+---
+
+## 🎛️ 多实体音频架构 (`volume_entity` 与 `stop_entity`)
+
+常规智能音箱（如 Google Nest、HomePod、小爱音箱）通常将音频串流、音量控制和会话生命周期集中在一个 `media_player` 实体中。
+
+但在**高保真 Hi-Fi 音响、发烧级音箱（如帝瓦雷 Devialet Phantom、KEF）、家庭影院 AV 功放（天龙 Denon、雅马哈 Yamaha）或外置网络数播转盘（WiiM Pro、HiFiBerry）**中，Home Assistant 通常会将硬件拆分为**职责各异的独立实体**：
+
+```mermaid
+flowchart TD
+    Card["TTS Broadcast Card (前端控制中心)"]
+
+    subgraph Targets ["多实体硬件分工架构 (Multi-Entity Architecture)"]
+        Streamer["1. 串流接收实体 (media_player)<br/>• 负责：接收网络音频流 (UPnP / DLNA / Cast)<br/>• 执行：play_media (提示音) & tts.speak"]
+        Amplifier["2. 硬件调音实体 (volume_entity)<br/>• 负责：物理 DAC 芯片与功放主控<br/>• 执行：volume_set (目标/恢复音量) & volume_mute (解静音)"]
+        Stopper["3. 会话切断实体 (stop_entity)<br/>• 负责：接收 media_stop 释放网络会话连接<br/>• 触发：音箱自动切回电视光纤 (Optical) / HDMI eARC"]
+    end
+
+    Card -->|"投送音频流"| Streamer
+    Card -->|"音量读取 / 设置 / 恢复"| Amplifier
+    Card -->|"释放会话连接"| Stopper
+```
+
+### 参数职责与解决痛点对照表
+
+| 配置项 | 架构角色 | 解决的实际痛点（为什么必须独立设置？） |
+| :--- | :--- | :--- |
+| **`media_player`**<br/>*(必填)* | **音频投送端 (Streaming Receiver)** | 接收 TTS 和提示音音频流的网络端点（如 DLNA 渲染器或 Cast 接收端）。 |
+| **`volume_entity`**<br/>*(可选)* | **硬件调音端 (Hardware Controller)** | **痛点**：串流端实体（如 DLNA DMR）往往不支持硬件调音，或者在串流端做数字衰减会损坏动态范围和音质；真正的硬件音量归功放主控实体管辖。<br/>**解决方案**：卡片读取初始音量、滑块设定、播报前解静音和播报后音量还原，全部**精准路由到硬件功放**。 |
+| **`stop_entity`**<br/>*(可选)* | **会话释放端 (Session Stopper)** | **痛点**：播报结束后需要发送 `media_stop` 释放 UPnP 连接，以便音箱切回电视声音。若只配置了 `volume_entity`（如功放主控），默认会把 stop 发给功放；而**纯功放通常不支持 Stop 播放指令（会报 HTTP 400 Bad Request 错误）**！<br/>**解决方案**：通过将 `stop_entity` 指定为串流端，保证精准释放 UPnP 会话且 0 报错，触发音箱自动切回电视光纤。 |
+
+### 典型真实硬件案例
+
+#### 案例 A：帝瓦雷 Devialet Phantom / Arch 对箱系统（电视光纤无缝切换）
+- **音频流接收端**：`media_player.devialet_upnp`（接收 UPnP 音频流）
+- **硬件主控实体**：`media_player.devialet_controller`（官方集成，控制物理音量、电源与静音）
+- **会话释放实体**：`media_player.devialet_upnp`（发送 `media_stop` 释放 UPnP 流，音箱秒切回电视光纤）
+
+```yaml
+type: custom:tts-broadcast-card
+media_player: media_player.devialet_upnp          # 投送 TTS 与提示音频
+volume_entity: media_player.devialet_controller   # 硬件音量与解静音
+stop_entity: media_player.devialet_upnp           # 释放 UPnP 会话，音箱切回电视光纤
+auto_stop: true
+restore_volume: true
+```
+
+#### 案例 B：外部网络数播（WiiM / HiFiBerry）+ 家庭影院 AV 功放（天龙/雅马哈）
+- **音频流接收端**：`media_player.wiim_pro_dlna`（WiiM 数播插在功放输入口）
+- **硬件调音实体**：`media_player.denon_avr`（天龙功放主控，控制客厅真实总音量）
+- **会话释放实体**：`media_player.wiim_pro_dlna`（播完停止 WiiM 的播放队列，避免天龙功放报 400 错误）
+
+```yaml
+type: custom:tts-broadcast-card
+media_player: media_player.wiim_pro_dlna   # 音频推到 WiiM 数播
+volume_entity: media_player.denon_avr      # 音量调整与解静音由天龙功放执行
+stop_entity: media_player.wiim_pro_dlna    # 播完停止 WiiM 流
+auto_unmute: true
+restore_volume: true
+```
+
+---
+
+## 🚀 高级自动化联动 (`script` 与 `input_text`)
+
+高级设置（Advanced Settings）为高阶用户和自动化联动场景量身打造，将**优雅的前端交互界面**与**强大的 Home Assistant 后台自动化能力**深度解耦。
+
+### 1. 同步消息文本实体 (`input_text`)
+
+#### 作用原理：
+每当用户在卡片中输入文本并按下回车或发送按钮时，卡片会自动调用 `input_text.set_value` 服务，把刚播报的文字**实时写入指定的 `input_text` 辅助实体**。
+
+#### 解决的实际痛点与典型应用：
+1. **播报历史与状态展示**：在仪表盘的其他位置，家庭成员可以通过普通 Markdown 卡片或实体卡片随时查看“最后一条广播讲了什么”，避免因当时不在音箱旁而漏看。
+2. **下游联动自动化触发源 (Chaining Automations)**：利用 Home Assistant 自动化监听 `input_text` 状态变化：只要一广播，就同步给手机 App 发一条推送通知，或将文字同步显示到智能中控屏/墨水屏上。
+
+#### 完整落地配置：
+
+**第 1 步：在 HA 创建 Helper（设置 -> 设备与服务 -> 辅助元素 -> 创建辅助元素 -> 文本）**  
+实体 ID：`input_text.last_broadcast_message`
+
+**第 2 步：卡片配置绑定辅助实体**
+```yaml
+type: custom:tts-broadcast-card
+media_player: media_player.living_room_speaker
+input_text: input_text.last_broadcast_message # 🌟 绑定文本辅助实体
+```
+
+**第 3 步：下游自动化（广播时同步推送手机通知）**
+```yaml
+alias: "广播同步推送手机通知"
+description: "当卡片发出广播时，将文本同步推送到家庭成员手机"
+trigger:
+  - platform: state
+    entity_id: input_text.last_broadcast_message
+condition:
+  - condition: template
+    value_template: "{{ trigger.to_state.state != '' }}"
+action:
+  - action: notify.notify
+    data:
+      title: "📢 家里刚刚发出了广播"
+      message: "{{ states('input_text.last_broadcast_message') }}"
+```
+
+---
+
+### 2. 自定义广播脚本代理 (`script`)
+
+#### 作用原理：
+默认情况下，卡片自带**零脚本 (Zero-Script)** 原生流水线（读取音量 -> 解静音 -> 调音量 -> 播提示音 -> 等待缓冲 -> 调用 Edge TTS -> 自动释放会话与恢复音量）。
+
+当配置了 `script: script.my_broadcast` 时，卡片将**跳过自带的 TTS 流程，改为直接调用您的后台脚本**，并将以下两个参数通过 `data` **完整传递给脚本**：
+- `message` (string)：卡片文本框中输入的广播文字。
+- `volume` (float, `0.0` ~ `1.0`)：卡片滑块选择的目标广播音量小数。
+
+#### 为什么有了卡片还需要用 `script`？
+卡片为您提供了**极致美观的前端操作体验**（单行精致 UI、音量胶囊滑块、本地音量记忆、回车发送、移动端键盘防误触、状态呼吸灯动画）；  
+而后台 `script` 则让您拥有**无上限的后端定制能力**：
+- **多房间/全屋广播编队**（全家 5 个音箱一起响，且支持闪烁走廊吊灯提醒）。
+- **音乐避让 (Audio Ducking)**（如果正在播放 Spotify，先暂停音乐 -> 广播完 -> 恢复播放音乐）。
+- **夜间安静模式防扰**（若在晚上 10 点后，不播放音箱，改为发手机通知）。
+- **自定义特殊 TTS 引擎**（如自行搭建的本地 Piper TTS 或 OpenAI TTS 私有接口）。
+
+#### 完整落地配置：
+
+**第 1 步：在 Home Assistant `scripts.yaml` 中编写自定义脚本**
+```yaml
+living_room_smart_broadcast:
+  alias: "智能联动广播脚本"
+  description: "接收卡片传递的 message 与 volume，实现闪灯与全屋播报"
+  fields:
+    message:
+      description: "卡片输入的文字"
+      example: "开饭啦！"
+    volume:
+      description: "卡片滑块选择的音量 (0.0 - 1.0)"
+      example: 0.65
+  sequence:
+    # 步骤 1: 闪烁客厅氛围灯提醒
+    - action: light.toggle
+      target:
+        entity_id: light.living_room_ambient
+    # 步骤 2: 将音箱设置到卡片滑块选择的音量
+    - action: media_player.volume_set
+      target:
+        entity_id: media_player.living_room_speaker
+      data:
+        volume_level: "{{ volume }}"
+    # 步骤 3: 播放提示音
+    - action: media_player.play_media
+      target:
+        entity_id: media_player.living_room_speaker
+      data:
+        media_content_id: media-source://media_source/local/bell.mp3
+        media_content_type: music
+    - delay: "00:00:02"
+    # 步骤 4: 调用本地 Piper TTS 朗读卡片文字
+    - action: tts.speak
+      target:
+        entity_id: tts.piper
+      data:
+        media_player_entity_id: media_player.living_room_speaker
+        message: "{{ message }}"
+    # 步骤 5: 同步推送到手机 App
+    - action: notify.notify
+      data:
+        message: "广播通知：{{ message }}"
+```
+
+**第 2 步：卡片配置关联脚本**
+```yaml
+type: custom:tts-broadcast-card
+media_player: media_player.living_room_speaker # 仍然指定主要音箱（用于状态监听）
+script: script.living_room_smart_broadcast      # 🌟 接管播报管线，自动传递 message 和 volume
+input_text: input_text.last_broadcast_message   # 可选：同步记录历史
+```
 
 ---
 
@@ -206,8 +384,16 @@ DLNA、AirPlay 或 Chromecast 音箱从空闲启动到音频会话激活存在�
 </details>
 
 <details>
-<summary><b>3. 如何配置双实体音响系统（如 Devialet Controller 与 UPnP Player）？</b></summary>
-许多高端音箱或家庭影院在 Home Assistant 中包含两个实体：一个负责 UPnP 网络音频流播放（如 <code>media_player.devialet_player</code>），另一个负责硬件主机音量控制（如 <code>media_player.devialet_controller</code>）。在卡片配置中，将 <code>media_player</code> 设置为播放流实体，将 <code>volume_entity</code> 设置为主控实体。卡片即可智能将音频流发送到播放器，同时将音量设定与解静音指令发送给主控实体。
+<summary><b>3. 如何配置双实体/多实体音响系统（如 Devialet Controller 与 UPnP Player）？</b></summary>
+许多高端音箱或家庭影院在 Home Assistant 中包含两到三个实体：一个负责网络音频流播放（如 <code>media_player.devialet_player</code>），一个负责硬件主机音量控制（如 <code>media_player.devialet_controller</code>），以及会话停止目标。
+
+在卡片配置中：
+<ul>
+  <li>将 <code>media_player</code> 设置为播放流实体（负责播放媒体流）。</li>
+  <li>将 <code>volume_entity</code> 设置为硬件主控实体（负责读取音量、调音、解静音和音量恢复）。</li>
+  <li>将 <code>stop_entity</code> 设置为播放流实体（确保 <code>media_stop</code> 精准释放 UPnP，避免纯功放报 400 Bad Request 错误）。</li>
+</ul>
+详细架构图解与配置示例请参见 <a href="#%EF%B8%8F-%E5%A4%9A%E5%AE%9E%E4%BD%93%E9%9F%B3%E9%A2%91%E6%9E%B6%E6%9E%84-volume_entity-%E4%B8%8E-stop_entity">多实体音频架构</a> 章节。
 </details>
 
 <details>
