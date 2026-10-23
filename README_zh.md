@@ -43,6 +43,7 @@
   - 🇯🇵 日文 $\to$ `ja-JP-NanamiNeural`（七海）
   - 🇰🇷 韩文 $\to$ `ko-KR-SunHiNeural`（善喜）
 - 📱 **移动端响应式布局优化**：针对宽小于等于 480px 的手机屏幕自动应用紧凑胶囊与滑块布局，多设备无缝适应。
+- ⚡ **输入法防误发与防重入管线**：完美支持中文/日文拼音与假名输入法（回车确认候选词绝不触发误广播），多消息异步版本号 (`_sessionId`) 机制防止连发冲突，超时熔断随文本长度动态自适应。
 - 🎛️ **全图形化配置面板（GUI Visual Editor）**：利用原生 `<ha-form>` 构建 5 个折叠面板（基础配置、音量与声音控制、提示音配置、外观与图标、高级设置），无需手写 YAML。
 - 🛡️ **实时状态指示与 18 秒安全熔断**：播报期间呈现呼吸光晕与声波徽标动画，自动监听播放器状态；内置 18 秒超时看门狗，防止因外部音箱状态异常导致按钮死锁。
 - 🔄 **完备向下兼容**：保留对传统自定义脚本（Script Mode）与 `input_text` 文本同步接口的向下兼容支持。
@@ -119,6 +120,7 @@
    - `volume_entity`（可选）：独立硬件音量实体（如外置功放或帝瓦雷主控实体）。
    - `auto_unmute`：播报前是否自动解除静音。
    - `auto_stop`：播报完成后是否自动停止/释放 UPnP 会话，以便恢复电视光纤音频。
+   - `stop_entity`（可选）：用于 Auto-Stop 会话停止/释放的独立控制实体。
 3. **提示音配置 (Notification Chime)**：
    - `chime_enabled`：提示音总开关（Toggle）。
    - `chime_url`：提示音音频链接（支持 `media-source://...`、`/local/...` 或外部 HTTP 音频）。
@@ -174,6 +176,7 @@ active_icon: mdi:volume-high
 | `volume_entity` | string | *无* | 可选独立硬件音量控制实体（用于与音频流实体解耦）。 |
 | `auto_unmute` | boolean | `true` | 播报前是否先向音箱发送解除静音指令。 |
 | `auto_stop` | boolean | `true` | 播报结束后是否自动停止会话，以便音箱自动切回电视光纤音频。 |
+| `stop_entity` | string | *无* | 可选独立的会话停止/释放控制实体（默认回退至 volume_entity 或 media_player）。 |
 | `chime_enabled` | boolean | `true` | 是否在播报前播放提示音。 |
 | `chime_url` | string | `media-source://...` | 提示声音频文件路径或网络直链。 |
 | `chime_delay` | number | `3.5` | 提示音播放完毕后等待音箱清空缓冲的时长（秒）。 |

@@ -11,6 +11,6 @@ A sleek, reactive text-to-speech broadcast card with interactive in-card volume 
 - **Pre-broadcast Notification Chime**: Built-in chime trigger with configurable speaker transition delay.
 - **Multi-language Edge TTS Voice Auto-Detection**: Chinese (Xiaoxiao), English (Jenny), Japanese (Nanami), and Korean (SunHi).
 - **Graphical Card Editor**: 5-tier visual settings form built with native `<ha-form>`.
-- **Live Status Pulse & Failsafe Watchdog**: Real-time state reflection with an 18s watchdog timer.
+- **Live Status Pulse & Dynamic Failsafe Watchdog**: Real-time state reflection with dynamic watchdog timeout based on announcement length.
 
 Check the repository [README](https://github.com/lucayunxiao/tts-broadcast-card#readme) for full installation and configuration instructions.

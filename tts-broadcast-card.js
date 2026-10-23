@@ -1,7 +1,7 @@
 /**
  * TTS Broadcast Card
  * Repository: https://github.com/lucayunxiao/tts-broadcast-card
- * Version: 1.2.0
+ * Version: 1.2.1
  * License: MIT
  *
  * A sleek, reactive text-to-speech broadcast card for Home Assistant Lovelace
@@ -76,6 +76,12 @@ const SCHEMA = [
         name: "auto_stop",
         label: "Auto-Stop (Release UPnP / Restore TV) After Broadcast",
         selector: { boolean: {} }
+      },
+      {
+        name: "stop_entity",
+        label: "Stop Target Entity (Optional override for Auto-Stop)",
+        required: false,
+        selector: { entity: { domain: "media_player" } }
       }
     ]
   },
@@ -225,7 +231,7 @@ class TtsBroadcastCardEditor extends HTMLElement {
           display: block;
         }
       </style>
-      <ha-form id=\"form\"></ha-form>
+      <ha-form id="form"></ha-form>
     `;
 
     this._form = this.shadowRoot.getElementById("form");
@@ -256,10 +262,13 @@ class TtsBroadcastCard extends HTMLElement {
     super();
     this._config = {};
     this._sessionActive = false;
+    this._sessionId = 0;
     this._sessionStartTime = 0;
+    this._maxSessionDuration = 18000;
     this._resetTimer = null;
     this._ticker = null;
     this._currentVolume = undefined;
+    this._lastConfigVolume = undefined;
     this._lastNonZeroVolume = 40;
     this._savedPriorVolume = null;
     this._savedPriorMute = null;
@@ -333,20 +342,31 @@ class TtsBroadcastCard extends HTMLElement {
       ...config
     };
 
+    const configuredVol = Number(this._config.volume_level ?? 40);
+
     if (this._currentVolume === undefined) {
       try {
-        const saved = localStorage.getItem("tts_broadcast_card_vol_" + (this._config.media_player || "default"));
+        const saved = localStorage.getItem(this._storageKey);
         if (saved !== null && !isNaN(Number(saved))) {
           this._currentVolume = Number(saved);
         } else {
-          this._currentVolume = Number(this._config.volume_level ?? 40);
+          this._currentVolume = configuredVol;
         }
       } catch (e) {
-        this._currentVolume = Number(this._config.volume_level ?? 40);
+        this._currentVolume = configuredVol;
       }
-      if (this._currentVolume > 0) {
-        this._lastNonZeroVolume = this._currentVolume;
-      }
+      this._lastConfigVolume = configuredVol;
+    } else if (this._lastConfigVolume !== configuredVol) {
+      // Sync when user modifies volume_level in card editor
+      this._currentVolume = configuredVol;
+      this._lastConfigVolume = configuredVol;
+      try {
+        localStorage.setItem(this._storageKey, String(this._currentVolume));
+      } catch (e) {}
+    }
+
+    if (this._currentVolume > 0) {
+      this._lastNonZeroVolume = this._currentVolume;
     }
 
     if (this._rendered) {
@@ -356,17 +376,41 @@ class TtsBroadcastCard extends HTMLElement {
     }
   }
 
+  get _storageKey() {
+    return "tts_broadcast_card_vol_" + (this._config.media_player || "default");
+  }
+
+  _getEffectiveVolume() {
+    if (this._config.show_volume_control === false) {
+      return Number(this._config.volume_level ?? 40);
+    }
+    return this._currentVolume !== undefined ? this._currentVolume : Number(this._config.volume_level ?? 40);
+  }
+
   set hass(hass) {
+    const oldHass = this._hass;
     this._hass = hass;
-    this._updateState();
+
+    if (!oldHass || this._sessionActive) {
+      this._updateState();
+      return;
+    }
+
+    const mp = this._config.media_player;
+    const sc = this._config.script;
+    const ve = this._config.volume_entity;
+    const se = this._config.stop_entity;
+    if (
+      (mp && oldHass.states[mp] !== hass.states[mp]) ||
+      (sc && oldHass.states[sc] !== hass.states[sc]) ||
+      (ve && oldHass.states[ve] !== hass.states[ve]) ||
+      (se && oldHass.states[se] !== hass.states[se])
+    ) {
+      this._updateState();
+    }
   }
 
   disconnectedCallback() {
-    if (this._restoreTimer) {
-      clearTimeout(this._restoreTimer);
-      this._restoreTimer = null;
-      this._restoreVolumeState();
-    }
     this._clearTimers();
   }
 
@@ -382,323 +426,326 @@ class TtsBroadcastCard extends HTMLElement {
   }
 
   connectedCallback() {
-    if (this._rendered) return;
-    this._rendered = true;
-    this.attachShadow({ mode: "open" });
-    this.shadowRoot.innerHTML = `
-      <style id=\"custom-styles\"></style>
-      <style>
-        :host {
-          display: block;
-        }
-        .card {
-          display: flex;
-          align-items: center;
-          background: var(--ha-card-background, var(--card-background-color, #fff));
-          border-radius: var(--ha-card-border-radius, 12px);
-          border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
-          box-shadow: var(--ha-card-box-shadow, none);
-          padding: 6px 12px;
-          gap: 8px;
-          box-sizing: border-box;
-          transition: border-color 0.4s ease, box-shadow 0.4s ease, background 0.3s ease;
-        }
-        .card.broadcasting {
-          border-color: var(--active-color, #ff5722) !important;
-          box-shadow: 0 0 14px var(--active-shadow, rgba(255, 87, 34, 0.35)) !important;
-        }
-        .input-box {
-          flex: 1;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          min-width: 0;
-        }
-        .input-icon {
-          color: var(--secondary-text-color, #888);
-          --mdc-icon-size: 20px;
-          display: flex;
-          align-items: center;
-          flex-shrink: 0;
-        }
-        input#msgInput {
-          flex: 1;
-          min-width: 0;
-          border: none;
-          background: transparent;
-          font-size: 14px;
-          color: var(--primary-text-color, #fff);
-          outline: none;
-          font-family: inherit;
-          padding: 8px 0;
-        }
-        input#msgInput::placeholder {
-          color: var(--secondary-text-color, #888);
-          opacity: 0.7;
-        }
-
-        /* Volume Control Box */
-        .volume-container {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          flex-shrink: 0;
-          padding: 2px 6px;
-          border-radius: 8px;
-          background: rgba(var(--rgb-primary-text, 255, 255, 255), 0.04);
-          transition: background 0.2s ease, border-color 0.2s ease;
-          border: 1px solid transparent;
-        }
-        .volume-container:hover {
-          background: rgba(var(--rgb-primary-text, 255, 255, 255), 0.08);
-          border-color: rgba(var(--rgb-primary-text, 255, 255, 255), 0.08);
-        }
-        .volume-pill {
-          display: flex;
-          align-items: center;
-          gap: 3px;
-          background: transparent;
-          border: none;
-          padding: 2px 2px;
-          color: var(--primary-text-color, #fff);
-          cursor: pointer;
-          font-family: inherit;
-          font-size: 11px;
-          font-weight: 600;
-          border-radius: 6px;
-          user-select: none;
-          -webkit-tap-highlight-color: transparent;
-        }
-        .volume-pill ha-icon {
-          --mdc-icon-size: 18px;
-          color: var(--ready-color, #2196f3);
-          transition: color 0.3s ease;
-        }
-        .volume-pill span {
-          min-width: 28px;
-          text-align: right;
-          font-variant-numeric: tabular-nums;
-          color: var(--secondary-text-color, #888);
-          font-size: 11px;
-        }
-        .volume-slider-box {
-          display: flex;
-          align-items: center;
-          width: 68px;
-          transition: width 0.2s ease;
-        }
-        .volume-slider {
-          width: 100%;
-          height: 4px;
-          -webkit-appearance: none;
-          appearance: none;
-          border-radius: 2px;
-          background: var(--divider-color, rgba(255, 255, 255, 0.2));
-          outline: none;
-          cursor: pointer;
-          accent-color: var(--ready-color, #2196f3);
-          transition: accent-color 0.3s ease;
-        }
-        .volume-slider::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 12px;
-          height: 12px;
-          border-radius: 50%;
-          background: var(--ready-color, #2196f3);
-          cursor: pointer;
-          transition: transform 0.1s ease;
-        }
-        .volume-slider::-webkit-slider-thumb:hover {
-          transform: scale(1.2);
-        }
-        .card.broadcasting .volume-pill ha-icon {
-          color: var(--active-color, #ff5722);
-        }
-        .card.broadcasting .volume-slider {
-          accent-color: var(--active-color, #ff5722);
-        }
-        .card.broadcasting .volume-slider::-webkit-slider-thumb {
-          background: var(--active-color, #ff5722);
-        }
-
-        .divider {
-          width: 1px;
-          height: 32px;
-          background: var(--divider-color, rgba(255, 255, 255, 0.12));
-          flex-shrink: 0;
-        }
-        .btn {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          background: transparent;
-          border: none;
-          padding: 4px 8px;
-          border-radius: 8px;
-          cursor: pointer;
-          color: var(--primary-text-color, #fff);
-          font-family: inherit;
-          user-select: none;
-          -webkit-tap-highlight-color: transparent;
-          flex-shrink: 0;
-          transition: background-color 0.2s, transform 0.15s ease;
-        }
-        .btn:hover {
-          background: rgba(var(--rgb-primary-text, 255, 255, 255), 0.06);
-        }
-        .btn:active {
-          transform: scale(0.97);
-        }
-        .icon-circle {
-          width: 36px;
-          height: 36px;
-          border-radius: 50%;
-          background: var(--ready-bg, rgba(33, 150, 243, 0.15));
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transition: background 0.4s ease;
-          position: relative;
-        }
-        .icon-circle ha-icon {
-          color: var(--ready-color, #2196f3);
-          --mdc-icon-size: 20px;
-          transition: color 0.4s ease;
-        }
-        .badge {
-          position: absolute;
-          top: -2px;
-          right: -2px;
-          width: 14px;
-          height: 14px;
-          border-radius: 50%;
-          background: var(--ready-color, #2196f3);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transition: background 0.4s ease;
-        }
-        .badge ha-icon {
-          color: #fff;
-          --mdc-icon-size: 10px;
-        }
-        .card.broadcasting .icon-circle {
-          background: var(--active-bg, rgba(255, 87, 34, 0.2));
-        }
-        .card.broadcasting .icon-circle ha-icon {
-          color: var(--active-color, #ff5722);
-        }
-        .card.broadcasting .badge {
-          background: var(--active-color, #ff5722);
-        }
-        .pulse-anim {
-          animation: tbc-pulse 1.8s ease-in-out infinite;
-        }
-        @keyframes tbc-pulse {
-          0% { transform: scale(1); opacity: 1; }
-          50% { transform: scale(1.08); opacity: 0.85; }
-          100% { transform: scale(1); opacity: 1; }
-        }
-        .text-group {
-          display: flex;
-          flex-direction: column;
-          align-items: flex-start;
-          text-align: left;
-        }
-        .primary-text {
-          font-size: 13px;
-          font-weight: 600;
-          line-height: 1.2;
-          color: var(--primary-text-color, #fff);
-          transition: color 0.3s ease;
-        }
-        .secondary-text {
-          font-size: 11px;
-          color: var(--secondary-text-color, #888);
-          line-height: 1.2;
-        }
-
-        @media (max-width: 480px) {
-          .volume-slider-box {
-            width: 48px;
+    if (!this._rendered) {
+      this._rendered = true;
+      this.attachShadow({ mode: "open" });
+      this.shadowRoot.innerHTML = `
+        <style id="custom-styles"></style>
+        <style>
+          :host {
+            display: block;
           }
+          .card {
+            display: flex;
+            align-items: center;
+            background: var(--ha-card-background, var(--card-background-color, #fff));
+            border-radius: var(--ha-card-border-radius, 12px);
+            border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
+            box-shadow: var(--ha-card-box-shadow, none);
+            padding: 6px 12px;
+            gap: 8px;
+            box-sizing: border-box;
+            transition: border-color 0.4s ease, box-shadow 0.4s ease, background 0.3s ease;
+          }
+          .card.broadcasting {
+            border-color: var(--active-color, #ff5722) !important;
+            box-shadow: 0 0 14px var(--active-shadow, rgba(255, 87, 34, 0.35)) !important;
+          }
+          .input-box {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+          }
+          .input-icon {
+            color: var(--secondary-text-color, #888);
+            --mdc-icon-size: 20px;
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+          }
+          input#msgInput {
+            flex: 1;
+            min-width: 0;
+            border: none;
+            background: transparent;
+            font-size: 14px;
+            color: var(--primary-text-color, #fff);
+            outline: none;
+            font-family: inherit;
+            padding: 8px 0;
+          }
+          input#msgInput::placeholder {
+            color: var(--secondary-text-color, #888);
+            opacity: 0.7;
+          }
+
+          /* Volume Control Box */
           .volume-container {
-            gap: 2px;
-            padding: 2px 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+            padding: 2px 6px;
+            border-radius: 8px;
+            background: rgba(var(--rgb-primary-text, 255, 255, 255), 0.04);
+            transition: background 0.2s ease, border-color 0.2s ease;
+            border: 1px solid transparent;
+          }
+          .volume-container:hover {
+            background: rgba(var(--rgb-primary-text, 255, 255, 255), 0.08);
+            border-color: rgba(var(--rgb-primary-text, 255, 255, 255), 0.08);
+          }
+          .volume-pill {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            background: transparent;
+            border: none;
+            padding: 2px 2px;
+            color: var(--primary-text-color, #fff);
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 6px;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+          }
+          .volume-pill ha-icon {
+            --mdc-icon-size: 18px;
+            color: var(--ready-color, #2196f3);
+            transition: color 0.3s ease;
           }
           .volume-pill span {
-            font-size: 10px;
-            min-width: 24px;
+            min-width: 28px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            color: var(--secondary-text-color, #888);
+            font-size: 11px;
           }
-        }
-      </style>
-      <div class=\"card\" id=\"card\">
-        <div class=\"input-box\">
-          <ha-icon class=\"input-icon\" id=\"inputIconEl\" icon=\"mdi:comment-text-outline\"></ha-icon>
-          <input type=\"text\" id=\"msgInput\" placeholder=\"Message...\" enterkeyhint=\"send\" autocomplete=\"off\" />
-        </div>
-        <div class=\"volume-container\" id=\"volumeContainer\">
-          <button class=\"volume-pill\" id=\"volumePill\" type=\"button\" title=\"Volume (Click to toggle mute)\">
-            <ha-icon id=\"volumeIcon\" icon=\"mdi:volume-high\"></ha-icon>
-            <span id=\"volumeValue\">40%</span>
-          </button>
-          <div class=\"volume-slider-box\" id=\"volumeSliderBox\">
-            <input type=\"range\" class=\"volume-slider\" id=\"volumeSlider\" min=\"0\" max=\"100\" step=\"5\" value=\"40\" title=\"Broadcast Volume\" />
+          .volume-slider-box {
+            display: flex;
+            align-items: center;
+            width: 68px;
+            transition: width 0.2s ease;
+          }
+          .volume-slider {
+            width: 100%;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            border-radius: 2px;
+            background: var(--divider-color, rgba(255, 255, 255, 0.2));
+            outline: none;
+            cursor: pointer;
+            accent-color: var(--ready-color, #2196f3);
+            transition: accent-color 0.3s ease;
+          }
+          .volume-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--ready-color, #2196f3);
+            cursor: pointer;
+            transition: transform 0.1s ease;
+          }
+          .volume-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+          }
+          .card.broadcasting .volume-pill ha-icon {
+            color: var(--active-color, #ff5722);
+          }
+          .card.broadcasting .volume-slider {
+            accent-color: var(--active-color, #ff5722);
+          }
+          .card.broadcasting .volume-slider::-webkit-slider-thumb {
+            background: var(--active-color, #ff5722);
+          }
+
+          .divider {
+            width: 1px;
+            height: 32px;
+            background: var(--divider-color, rgba(255, 255, 255, 0.12));
+            flex-shrink: 0;
+          }
+          .btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: transparent;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 8px;
+            cursor: pointer;
+            color: var(--primary-text-color, #fff);
+            font-family: inherit;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            flex-shrink: 0;
+            transition: background-color 0.2s, transform 0.15s ease;
+          }
+          .btn:hover {
+            background: rgba(var(--rgb-primary-text, 255, 255, 255), 0.06);
+          }
+          .btn:active {
+            transform: scale(0.97);
+          }
+          .icon-circle {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--ready-bg, rgba(33, 150, 243, 0.15));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.4s ease;
+            position: relative;
+          }
+          .icon-circle ha-icon {
+            color: var(--ready-color, #2196f3);
+            --mdc-icon-size: 20px;
+            transition: color 0.4s ease;
+          }
+          .badge {
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--ready-color, #2196f3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.4s ease;
+          }
+          .badge ha-icon {
+            color: #fff;
+            --mdc-icon-size: 10px;
+          }
+          .card.broadcasting .icon-circle {
+            background: var(--active-bg, rgba(255, 87, 34, 0.2));
+          }
+          .card.broadcasting .icon-circle ha-icon {
+            color: var(--active-color, #ff5722);
+          }
+          .card.broadcasting .badge {
+            background: var(--active-color, #ff5722);
+          }
+          .pulse-anim {
+            animation: tbc-pulse 1.8s ease-in-out infinite;
+          }
+          @keyframes tbc-pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.08); opacity: 0.85; }
+            100% { transform: scale(1); opacity: 1; }
+          }
+          .text-group {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            text-align: left;
+          }
+          .primary-text {
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.2;
+            color: var(--primary-text-color, #fff);
+            transition: color 0.3s ease;
+          }
+          .secondary-text {
+            font-size: 11px;
+            color: var(--secondary-text-color, #888);
+            line-height: 1.2;
+          }
+
+          @media (max-width: 480px) {
+            .volume-slider-box {
+              width: 48px;
+            }
+            .volume-container {
+              gap: 2px;
+              padding: 2px 4px;
+            }
+            .volume-pill span {
+              font-size: 10px;
+              min-width: 24px;
+            }
+          }
+        </style>
+        <div class="card" id="card">
+          <div class="input-box">
+            <ha-icon class="input-icon" id="inputIconEl" icon="mdi:comment-text-outline"></ha-icon>
+            <input type="text" id="msgInput" placeholder="Message..." enterkeyhint="send" autocomplete="off" />
           </div>
-        </div>
-        <div class=\"divider\"></div>
-        <button class=\"btn\" id=\"sendBtn\" type=\"button\">
-          <div class=\"icon-circle\" id=\"iconCircle\">
-            <ha-icon id=\"mainIcon\" icon=\"mdi:bullhorn\"></ha-icon>
-            <div class=\"badge\" id=\"badgeEl\">
-              <ha-icon id=\"badgeIcon\" icon=\"mdi:send\"></ha-icon>
+          <div class="volume-container" id="volumeContainer">
+            <button class="volume-pill" id="volumePill" type="button" title="Volume (Click to toggle mute)">
+              <ha-icon id="volumeIcon" icon="mdi:volume-high"></ha-icon>
+              <span id="volumeValue">40%</span>
+            </button>
+            <div class="volume-slider-box" id="volumeSliderBox">
+              <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" step="5" value="40" title="Broadcast Volume" />
             </div>
           </div>
-          <div class=\"text-group\">
-            <span class=\"primary-text\" id=\"primaryText\">Broadcast</span>
-            <span class=\"secondary-text\" id=\"secondaryText\">Media Player</span>
-          </div>
-        </button>
-      </div>
-    `;
+          <div class="divider"></div>
+          <button class="btn" id="sendBtn" type="button">
+            <div class="icon-circle" id="iconCircle">
+              <ha-icon id="mainIcon" icon="mdi:bullhorn"></ha-icon>
+              <div class="badge" id="badgeEl">
+                <ha-icon id="badgeIcon" icon="mdi:send"></ha-icon>
+              </div>
+            </div>
+            <div class="text-group">
+              <span class="primary-text" id="primaryText">Broadcast</span>
+              <span class="secondary-text" id="secondaryText">Media Player</span>
+            </div>
+          </button>
+        </div>
+      `;
 
-    const input = this.shadowRoot.getElementById("msgInput");
-    const btn = this.shadowRoot.getElementById("sendBtn");
-    const volumeSlider = this.shadowRoot.getElementById("volumeSlider");
-    const volumePill = this.shadowRoot.getElementById("volumePill");
+      const input = this.shadowRoot.getElementById("msgInput");
+      const btn = this.shadowRoot.getElementById("sendBtn");
+      const volumeSlider = this.shadowRoot.getElementById("volumeSlider");
+      const volumePill = this.shadowRoot.getElementById("volumePill");
 
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      if (input) input.blur();
-      this._handleSend();
-    });
-
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
+      btn.addEventListener("click", (e) => {
         e.preventDefault();
-        input.blur();
+        if (input) input.blur();
         this._handleSend();
-      }
-    });
-
-    if (volumeSlider) {
-      volumeSlider.addEventListener("input", (e) => {
-        this._updateVolumeValue(e.target.value);
       });
-    }
 
-    if (volumePill) {
-      volumePill.addEventListener("click", (e) => {
-        e.preventDefault();
-        // Toggle mute / restore
-        if (this._currentVolume > 0) {
-          this._lastNonZeroVolume = this._currentVolume;
-          this._updateVolumeValue(0);
-        } else {
-          this._updateVolumeValue(this._lastNonZeroVolume || 40);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.isComposing) {
+          e.preventDefault();
+          input.blur();
+          this._handleSend();
         }
       });
+
+      if (volumeSlider) {
+        volumeSlider.addEventListener("input", (e) => {
+          this._updateVolumeValue(e.target.value);
+        });
+      }
+
+      if (volumePill) {
+        volumePill.addEventListener("click", (e) => {
+          e.preventDefault();
+          if (this._currentVolume > 0) {
+            this._lastNonZeroVolume = this._currentVolume;
+            this._updateVolumeValue(0);
+          } else {
+            this._updateVolumeValue(this._lastNonZeroVolume || 40);
+          }
+        });
+      }
+    } else if (this._sessionActive && !this._ticker) {
+      // Resume ticker if card was re-attached to DOM during active session
+      this._ticker = setInterval(() => this._updateState(), 500);
     }
 
     this._updateStyles();
@@ -713,7 +760,7 @@ class TtsBroadcastCard extends HTMLElement {
     }
     this._updateVolumeUI();
     try {
-      localStorage.setItem("tts_broadcast_card_vol_" + (this._config.media_player || "default"), String(this._currentVolume));
+      localStorage.setItem(this._storageKey, String(this._currentVolume));
     } catch (e) {}
   }
 
@@ -725,10 +772,10 @@ class TtsBroadcastCard extends HTMLElement {
     const iconEl = this.shadowRoot.getElementById("volumeIcon");
 
     if (container) {
-      container.style.display = (this._config.show_volume_control === false) ? "none" : "flex";
+      container.style.display = this._config.show_volume_control === false ? "none" : "flex";
     }
 
-    const vol = this._currentVolume !== undefined ? this._currentVolume : Number(this._config.volume_level ?? 40);
+    const vol = this._getEffectiveVolume();
     if (slider) slider.value = String(vol);
     if (valueEl) valueEl.textContent = `${vol}%`;
     if (iconEl) {
@@ -755,37 +802,27 @@ class TtsBroadcastCard extends HTMLElement {
     styleEl.textContent = `
       :host {
         --ready-color: ${readyColor};
-        --ready-bg: ${readyColor}26;
+        --ready-bg: color-mix(in srgb, ${readyColor} 15%, transparent);
         --active-color: ${activeColor};
-        --active-bg: ${activeColor}33;
-        --active-shadow: ${activeColor}59;
+        --active-bg: color-mix(in srgb, ${activeColor} 20%, transparent);
+        --active-shadow: color-mix(in srgb, ${activeColor} 35%, transparent);
       }
     `;
   }
 
   async _performAutoStop() {
     const stopEntity = this._config.stop_entity || this._config.volume_entity || this._config.media_player;
-    const entityObj = this._hass && this._hass.states && this._hass.states[stopEntity];
-    const features = (entityObj && entityObj.attributes && entityObj.attributes.supported_features) || 0;
+    const entityObj = this._hass?.states?.[stopEntity];
+    const features = entityObj?.attributes?.supported_features || 0;
     // MediaPlayerEntityFeature: STOP = 4096 (or 2048 in older HA), PAUSE = 1
     const supportsStop = (features & 4096) !== 0 || (features & 2048) !== 0;
     const supportsPause = (features & 1) !== 0;
 
     try {
       if (supportsStop) {
-        await this._hass.callService(
-          "media_player",
-          "media_stop",
-          {},
-          { entity_id: stopEntity }
-        );
+        await this._hass.callService("media_player", "media_stop", {}, { entity_id: stopEntity });
       } else if (supportsPause) {
-        await this._hass.callService(
-          "media_player",
-          "media_pause",
-          {},
-          { entity_id: stopEntity }
-        );
+        await this._hass.callService("media_player", "media_pause", {}, { entity_id: stopEntity });
       }
     } catch (stopErr) {
       console.warn("Auto-stop safe notice:", stopErr);
@@ -825,27 +862,46 @@ class TtsBroadcastCard extends HTMLElement {
     }
   }
 
+  async _cleanupPostBroadcast() {
+    if (this._restoreTimer) {
+      clearTimeout(this._restoreTimer);
+      this._restoreTimer = null;
+    }
+    if (!this._config.script && this._config.auto_stop !== false) {
+      await this._performAutoStop();
+    }
+    if (this._config.restore_volume) {
+      await this._restoreVolumeState();
+    }
+  }
+
   async _handleSend() {
     const input = this.shadowRoot?.getElementById("msgInput");
     if (!input) return;
     const text = (input.value || "").trim();
     if (!text) return;
 
-    if (window.navigator && window.navigator.vibrate) {
+    if (window.navigator?.vibrate) {
       window.navigator.vibrate(50);
     }
 
     input.value = "";
+
+    const currentSessionId = ++this._sessionId;
+    const chimeWaitMs = this._config.chime_enabled !== false ? Number(this._config.chime_delay ?? 3.5) * 1000 : 0;
+    const estDurationMs = Math.max(5000, text.length * 280) + 2000;
+    this._maxSessionDuration = chimeWaitMs + estDurationMs + 6000;
+
     this._startSession();
 
     try {
-      const targetVol = this._currentVolume !== undefined ? this._currentVolume : Number(this._config.volume_level ?? 40);
+      const targetVol = this._getEffectiveVolume();
       const volDecimal = Math.max(0, Math.min(1, targetVol / 100));
       const volumeEntity = this._config.volume_entity || this._config.media_player;
 
       // Capture prior volume and mute status before modifying (with back-to-back collision lock)
       if (this._config.restore_volume) {
-        const entityObj = this._hass && this._hass.states && this._hass.states[volumeEntity];
+        const entityObj = this._hass?.states?.[volumeEntity];
         const currentVol = entityObj?.attributes?.volume_level;
         const currentMute = entityObj?.attributes?.is_volume_muted;
 
@@ -855,13 +911,11 @@ class TtsBroadcastCard extends HTMLElement {
         }
       }
 
-      // Clear any pending restore timer from previous broadcast so it doesn't interrupt this broadcast
       if (this._restoreTimer) {
         clearTimeout(this._restoreTimer);
         this._restoreTimer = null;
       }
 
-      // Optional input_text synchronization if configured
       if (this._config.input_text) {
         this._hass.callService("input_text", "set_value", {
           entity_id: this._config.input_text,
@@ -869,7 +923,6 @@ class TtsBroadcastCard extends HTMLElement {
         }).catch((err) => console.warn("Sync to input_text failed:", err));
       }
 
-      // If a custom script is specified in Advanced settings, delegate to it
       if (this._config.script) {
         await this._hass.callService(
           "script",
@@ -879,22 +932,22 @@ class TtsBroadcastCard extends HTMLElement {
             volume: volDecimal
           }
         );
+        if (currentSessionId !== this._sessionId) return;
+
         if (this._config.restore_volume) {
-          const estDurationMs = Math.max(5000, text.length * 280) + 2000;
-          this._restoreTimer = setTimeout(async () => {
-            await this._restoreVolumeState();
-            this._restoreTimer = null;
+          this._restoreTimer = setTimeout(() => {
+            if (currentSessionId === this._sessionId) {
+              this._endSession(true);
+            }
           }, estDurationMs);
         }
       } else {
-        // Native Zero-Script Broadcast Pipeline
         const mediaPlayer = this._config.media_player;
         const ttsEntity = this._config.tts_entity || "tts.edge_tts";
         const chimeEnabled = this._config.chime_enabled !== false;
         const chimeUrl = this._config.chime_url || "media-source://media_source/local/notification.mp3";
-        const chimeDelay = Number(this._config.chime_delay ?? 3.5);
 
-        // Stage 0: Hardware un-mute and set volume on the target volume entity
+        // Stage 0: Hardware un-mute and set volume
         if (this._config.auto_unmute !== false) {
           try {
             await this._hass.callService(
@@ -907,6 +960,7 @@ class TtsBroadcastCard extends HTMLElement {
             console.warn("Auto-unmute failed:", mErr);
           }
         }
+        if (currentSessionId !== this._sessionId) return;
 
         try {
           await this._hass.callService(
@@ -918,8 +972,9 @@ class TtsBroadcastCard extends HTMLElement {
         } catch (vErr) {
           console.warn("Volume set failed:", vErr);
         }
+        if (currentSessionId !== this._sessionId) return;
 
-        // Stage 1: Pre-broadcast chime (if enabled)
+        // Stage 1: Pre-broadcast chime
         if (chimeEnabled && chimeUrl) {
           await this._hass.callService(
             "media_player",
@@ -931,29 +986,29 @@ class TtsBroadcastCard extends HTMLElement {
             { entity_id: mediaPlayer }
           );
 
-          // Stage 2: Safe transition delay to let speaker buffer clear
-          if (chimeDelay > 0) {
-            await new Promise((resolve) => setTimeout(resolve, chimeDelay * 1000));
+          if (chimeWaitMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, chimeWaitMs));
           }
+          if (currentSessionId !== this._sessionId) return;
         }
 
-        // Stage 3: Multi-language voice detection
+        // Stage 2: Multi-language voice detection (Kana & Hangul checked before Hanzi/Kanji)
         let voice = "en-US-JennyNeural";
-        if (/[\u4e00-\u9fff]/.test(text)) {
-          voice = "zh-CN-XiaoxiaoNeural";
-        } else if (/[\u3040-\u30ff]/.test(text)) {
+        if (/[\u3040-\u30ff]/.test(text)) {
           voice = "ja-JP-NanamiNeural";
         } else if (/[\uac00-\ud7af]/.test(text)) {
           voice = "ko-KR-SunHiNeural";
+        } else if (/[\u4e00-\u9fff]/.test(text)) {
+          voice = "zh-CN-XiaoxiaoNeural";
         }
 
-        // Stage 4: Text-to-speech execution
+        // Stage 3: Text-to-speech execution
         const speakData = {
           media_player_entity_id: mediaPlayer,
           message: text
         };
         if (ttsEntity.toLowerCase().includes("edge")) {
-          speakData.options = { voice: voice };
+          speakData.options = { voice };
         }
 
         await this._hass.callService(
@@ -962,23 +1017,22 @@ class TtsBroadcastCard extends HTMLElement {
           speakData,
           { entity_id: ttsEntity }
         );
+        if (currentSessionId !== this._sessionId) return;
 
-        // Stage 5: Post-broadcast session release and volume restoration
-        const estDurationMs = Math.max(5000, text.length * 280) + 2000;
+        // Stage 4: Fallback timer for post-broadcast cleanup if state change isn't detected earlier
         if (this._config.auto_stop !== false || this._config.restore_volume) {
-          this._restoreTimer = setTimeout(async () => {
-            if (this._config.auto_stop !== false) {
-              await this._performAutoStop();
+          this._restoreTimer = setTimeout(() => {
+            if (currentSessionId === this._sessionId) {
+              this._endSession(true);
             }
-            if (this._config.restore_volume) {
-              await this._restoreVolumeState();
-            }
-            this._restoreTimer = null;
           }, estDurationMs);
         }
       }
     } catch (err) {
       console.error("TTS Broadcast error:", err);
+      if (currentSessionId === this._sessionId) {
+        this._endSession(true);
+      }
     }
   }
 
@@ -993,10 +1047,15 @@ class TtsBroadcastCard extends HTMLElement {
     }, 500);
   }
 
-  _endSession() {
+  _endSession(runCleanup = false) {
+    const wasActive = this._sessionActive;
     this._sessionActive = false;
     this._clearTimers();
     this._updateState();
+
+    if (runCleanup && wasActive) {
+      this._cleanupPostBroadcast();
+    }
   }
 
   _updateState() {
@@ -1012,7 +1071,6 @@ class TtsBroadcastCard extends HTMLElement {
 
     if (!card || !mainIcon) return;
 
-    // Apply configured placeholder and icons
     if (input && this._config.placeholder) {
       input.placeholder = this._config.placeholder;
     }
@@ -1020,43 +1078,33 @@ class TtsBroadcastCard extends HTMLElement {
       inputIcon.setAttribute("icon", this._config.input_icon || "mdi:comment-text-outline");
     }
 
-    const playerStateObj = this._hass && this._hass.states[this._config.media_player];
-    const isPlaying = playerStateObj && playerStateObj.state === "playing";
+    const playerStateObj = this._hass?.states?.[this._config.media_player];
+    const isPlaying = playerStateObj && (playerStateObj.state === "playing" || playerStateObj.state === "buffering");
 
-    const scriptStateObj = this._config.script && this._hass && this._hass.states[this._config.script];
+    const scriptStateObj = this._config.script && this._hass?.states?.[this._config.script];
     const isScriptOn = scriptStateObj && scriptStateObj.state === "on";
 
     if (this._sessionActive) {
       const elapsed = Date.now() - this._sessionStartTime;
 
-      // Hard timeout guard (18 seconds maximum failsafe)
-      if (elapsed > 18000) {
-        if (this._restoreTimer) {
-          clearTimeout(this._restoreTimer);
-          this._restoreTimer = null;
-        }
-        if (this._config.restore_volume && this._savedPriorVolume !== null) {
-          this._restoreVolumeState();
-        }
-        this._endSession();
+      // Dynamic failsafe timeout guard
+      if (elapsed > this._maxSessionDuration) {
+        this._endSession(true);
         return;
       }
 
-      // Smooth debounce after minimum playback window
-      const chimeWait = this._config.chime_enabled !== false ? (Number(this._config.chime_delay ?? 3.5) * 1000) : 0;
-      const minWindow = Math.max(3000, chimeWait + 1500);
+      const chimeWait = this._config.chime_enabled !== false ? Number(this._config.chime_delay ?? 3.5) * 1000 : 0;
+      const minWindow = Math.max(3500, chimeWait + 2000);
 
       if (elapsed > minWindow && !isPlaying && !isScriptOn) {
         if (!this._resetTimer) {
           this._resetTimer = setTimeout(() => {
-            this._endSession();
+            this._endSession(true);
           }, 1000);
         }
-      } else {
-        if (this._resetTimer) {
-          clearTimeout(this._resetTimer);
-          this._resetTimer = null;
-        }
+      } else if (this._resetTimer) {
+        clearTimeout(this._resetTimer);
+        this._resetTimer = null;
       }
     }
 
@@ -1091,4 +1139,3 @@ window.customCards.push({
   preview: true,
   documentationURL: "https://github.com/lucayunxiao/tts-broadcast-card"
 });
-

@@ -43,6 +43,7 @@
   - 🇯🇵 Japanese $\to$ `ja-JP-NanamiNeural` (Nanami / 七海)
   - 🇰🇷 Korean $\to$ `ko-KR-SunHiNeural` (SunHi / 善喜)
 - 📱 **Mobile Screen Optimization**: Responsive layout adjustments for mobile screens (`<= 480px`), providing a compact volume pill and slider.
+- ⚡ **IME Composition & Rapid Re-entrancy Protection**: Built-in support for Chinese/Japanese IME (`isComposing` guard prevents accidental Enter sends while selecting candidate words), async pipeline cancellation (`_sessionId`) to abort stale broadcasts on double-sends, and dynamic duration watchdogs.
 - 🎛️ **Full Graphical Visual Configurator**: Clean 5-tier expandable `<ha-form>` editor (Core Settings, Volume & Sound Control, Notification Chime, Appearance & Icons, Advanced Settings).
 - 🛡️ **Debounced State & 18s Safety Watchdog**: Dynamic pulse animation during playback, real-time media player state tracking, and an 18-second failsafe safety reset watchdog.
 - 🔄 **Backward Compatible**: Supports optional custom script delegation and `input_text` state synchronization for power users.
@@ -119,6 +120,7 @@ Add a new card to your dashboard and select **TTS Broadcast Card**. The visual e
    - `volume_entity` (*Optional*): Hardware volume entity override (e.g. amplifier or Devialet controller).
    - `auto_unmute`: Automatically un-mute speaker before broadcast.
    - `auto_stop`: Release UPnP/DLNA session after speech so TV Optical / HDMI eARC restores automatically.
+   - `stop_entity` (*Optional*): Stop target entity override for Auto-Stop session release.
 3. **Notification Chime**:
    - `chime_enabled`: Toggle pre-broadcast chime audio on/off.
    - `chime_url`: URL or media path (`media-source://...`, `/local/...`, or HTTP URL).
@@ -174,6 +176,7 @@ active_icon: mdi:volume-high
 | `volume_entity` | string | *None* | Optional hardware volume entity ID for dual-entity speaker setups. |
 | `auto_unmute` | boolean | `true` | Automatically un-mute speaker before broadcasting. |
 | `auto_stop` | boolean | `true` | Automatically release UPnP session after playback to restore TV optical sound. |
+| `stop_entity` | string | *None* | Optional override entity for Auto-Stop session release (defaults to volume_entity or media_player). |
 | `chime_enabled` | boolean | `true` | Whether to play a pre-broadcast notification sound. |
 | `chime_url` | string | `media-source://media_source/local/notification.mp3` | Audio URL or path for notification chime. |
 | `chime_delay` | number | `3.5` | Transition delay (in seconds) between chime and speech. |
